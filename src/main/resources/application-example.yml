@@ -1,0 +1,27 @@
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:3306/vvv
+    username: your-db-username
+    password: your-db-password
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  servlet:
+    multipart:
+      max-file-size: 20000MB    # 单文件
+      max-request-size: 500000MB # 总请求
+
+mybatis:
+  mapper-locations: classpath*:mappers/**/*.xml
+  type-aliases-package: com.v1rtual.vvv_backend.entity
+  configuration:
+    map-underscore-to-camel-case: true
+
+aliyun:
+  oss:
+    endpoint: oss-cn-beijing.aliyuncs.com # 地域Endpoint
+    access-key-id: your-access-key-id
+    access-key-secret: your-access-key-secret
+    bucket-name: your-bucket-name
+
+jwt:
+  secret: your-jwt-secret-at-least-32-chars
+  expiration: 604800000 # 7天

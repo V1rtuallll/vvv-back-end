@@ -9,6 +9,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.apache.commons.lang3.StringUtils;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -66,6 +67,7 @@ public class GalleryController {
   /**
    * 批量上传媒体
    */
+  @Transactional
   @PostMapping("/upload")
   public Result<Void> upload(MultipartFile[] files,
       @RequestParam(required = false) String[] titles,

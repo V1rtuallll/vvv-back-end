@@ -1,4 +1,4 @@
-CREATE DATABASE IF NOT EXISTS `vvv` /*!40100 DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci */ /*!80016 DEFAULT ENCRYPTION='N' */;
+CREATE DATABASE IF NOT EXISTS `vvv` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 USE `vvv`;
 -- MySQL dump 10.13  Distrib 8.0.40, for Win64 (x86_64)
@@ -197,7 +197,7 @@ CREATE TABLE `comment_like` (
     `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_user_comment` (`user_id`, `comment_id`)
-) ENGINE = InnoDB AUTO_INCREMENT = 7 DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci;
+) ENGINE = InnoDB AUTO_INCREMENT = 7 DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */
 ;
 
@@ -208,7 +208,14 @@ CREATE TABLE `comment_like` (
 LOCK TABLES `comment_like` WRITE;
 /*!40000 ALTER TABLE `comment_like` DISABLE KEYS */
 ;
-INSERT INTO `comment_like` VALUES ( 6, 0, 11, '2025-12-26 20:00:09' );
+INSERT INTO
+    `comment_like`
+VALUES (
+        6,
+        0,
+        11,
+        '2025-12-26 20:00:09'
+    );
 /*!40000 ALTER TABLE `comment_like` ENABLE KEYS */
 ;
 UNLOCK TABLES;
@@ -337,7 +344,7 @@ CREATE TABLE `gallery_like` (
     KEY `gallery_id` (`gallery_id`),
     CONSTRAINT `gallery_like_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `user` (`id`) ON DELETE CASCADE,
     CONSTRAINT `gallery_like_ibfk_2` FOREIGN KEY (`gallery_id`) REFERENCES `gallery` (`id`) ON DELETE CASCADE
-) ENGINE = InnoDB AUTO_INCREMENT = 12 DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci;
+) ENGINE = InnoDB AUTO_INCREMENT = 12 DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */
 ;
 
@@ -1032,7 +1039,7 @@ CREATE TABLE `home_config` (
     `pinned_blog_id` bigint DEFAULT NULL COMMENT '置顶Blog ID（手动指定）',
     `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`)
-) ENGINE = InnoDB AUTO_INCREMENT = 2 DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci;
+) ENGINE = InnoDB AUTO_INCREMENT = 2 DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */
 ;
 
@@ -1861,7 +1868,7 @@ CREATE TABLE `video` (
     KEY `idx_is_pinned` (`is_pinned`),
     KEY `idx_created_at` (`created_at` DESC),
     KEY `idx_tags` (`tags`)
-) ENGINE = InnoDB AUTO_INCREMENT = 15 DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci;
+) ENGINE = InnoDB AUTO_INCREMENT = 15 DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */
 ;
 

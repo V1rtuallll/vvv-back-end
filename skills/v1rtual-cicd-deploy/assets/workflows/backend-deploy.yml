@@ -1,0 +1,52 @@
+name: Deploy backend
+
+on:
+  workflow_dispatch:
+  # Enable only after a manual deployment succeeds.
+  # push:
+  #   branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v1rtual-backend-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Build executable JAR
+        run: |
+          chmod +x mvnw
+          ./mvnw -B clean package -DskipTests
+          jar_file="$(find target -maxdepth 1 -type f -name '*.jar' ! -name '*.jar.original' | head -n 1)"
+          test -n "$jar_file"
+          cp "$jar_file" app.jar
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Upload and release
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT }}
+          REVISION: ${{ github.sha }}
+        run: |
+          SSH="ssh -i ~/.ssh/id_ed25519 -p $DEPLOY_SSH_PORT"
+          scp -i ~/.ssh/id_ed25519 -P "$DEPLOY_SSH_PORT" app.jar "$DEPLOY_USER@$DEPLOY_HOST:/tmp/v1rtual-backend-$REVISION.jar"
+          $SSH "$DEPLOY_USER@$DEPLOY_HOST" "sudo /usr/local/sbin/v1rtual-deploy-backend $REVISION"

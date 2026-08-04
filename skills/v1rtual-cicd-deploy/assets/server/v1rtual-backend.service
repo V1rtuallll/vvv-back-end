@@ -1,0 +1,19 @@
+[Unit]
+Description=V1rtual Spring Boot backend
+After=network.target
+
+[Service]
+Type=simple
+User=v1rtual
+Group=v1rtual
+WorkingDirectory=/srv/v1rtual/backend
+Environment=SPRING_PROFILES_ACTIVE=prod
+ExecStart=__JAVA_BIN__ -jar /srv/v1rtual/backend/current/app.jar --spring.config.additional-location=file:/etc/v1rtual/application-prod.yml
+Restart=on-failure
+RestartSec=5
+SuccessExitStatus=143
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

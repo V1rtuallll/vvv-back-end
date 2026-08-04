@@ -1,4 +1,0 @@
-interface:
-  display_name: "V1rtual CI/CD Deploy"
-  short_description: "Build and release Vite and Spring Boot over SSH"
-  default_prompt: "Use $v1rtual-cicd-deploy to prepare or update the V1rtual production pipeline."

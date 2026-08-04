@@ -1,10 +1,8 @@
 name: Deploy backend
 
 on:
+  # Start this workflow from Actions and select the complete site branch to release.
   workflow_dispatch:
-  # Enable only after a manual deployment succeeds.
-  # push:
-  #   branches: [main]
 
 permissions:
   contents: read
@@ -47,6 +45,6 @@ jobs:
           DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT }}
           REVISION: ${{ github.sha }}
         run: |
-          SSH="ssh -i ~/.ssh/id_ed25519 -p $DEPLOY_SSH_PORT"
+          ssh_base=(ssh -i ~/.ssh/id_ed25519 -p "$DEPLOY_SSH_PORT")
           scp -i ~/.ssh/id_ed25519 -P "$DEPLOY_SSH_PORT" app.jar "$DEPLOY_USER@$DEPLOY_HOST:/tmp/v1rtual-backend-$REVISION.jar"
-          $SSH "$DEPLOY_USER@$DEPLOY_HOST" "sudo /usr/local/sbin/v1rtual-deploy-backend $REVISION"
+          "${ssh_base[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "sudo /usr/local/sbin/v1rtual-deploy-backend $REVISION"

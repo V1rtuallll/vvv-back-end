@@ -1,0 +1,4 @@
+interface:
+  display_name: "V1rtual Backend CI/CD"
+  short_description: "Build and deploy the current Spring Boot branch"
+  default_prompt: "Use $v1rtual-backend-cicd to validate or deploy the current V1rtual backend branch."

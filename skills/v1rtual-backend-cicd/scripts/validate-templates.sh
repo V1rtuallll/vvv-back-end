@@ -13,5 +13,5 @@ for workflow in "$skill_dir"/assets/workflows/*.yml; do
   rg -q 'SSH_KNOWN_HOSTS' "$workflow"
 done
 
-rg -q 'application-prod.yml' "$skill_dir/assets/server/v1rtual-backend.service"
+rg -q 'application-prod.yml' "$skill_dir/assets/server/spring_V1rtual.service"
 printf 'Deployment templates passed static validation.\n'

@@ -1,9 +1,8 @@
 name: Deploy backend
 
 on:
+  # Start this workflow from Actions and select the complete site branch to release.
   workflow_dispatch:
-  push:
-    branches: [main]
 
 permissions:
   contents: read

@@ -37,6 +37,8 @@ The repository's `production` Environment may be used for visibility, but the ex
 
 `/etc/v1rtual/application-prod.yml` must contain production MySQL, OSS, and JWT settings. It is neither committed nor copied by Actions. Keep an example in source only. Before the first deploy, ensure the database schema exists and the configured Java version is 21.
 
+The backend listener must match the Nginx `/api/` reverse-proxy target. At the verified personal-site deployment, both use `127.0.0.1:8080`. Local development may use a different listener, currently `8848`; do not change the production listener through the frontend Vite configuration.
+
 ## Expected Triggers
 
 CI runs on every branch push and pull request. Deploy is `workflow_dispatch` only: select the branch that represents the complete site you want on the server.

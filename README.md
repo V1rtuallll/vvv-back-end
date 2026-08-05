@@ -1,138 +1,78 @@
-# v1.0 原初之地版本 - README
+# V1rtual Backend
 
-## 项目概述
+V1rtual 个人网站后端，当前分支版本为 `V1rtualSS`。
 
-**v1.0 原初之地版本** 是一个个人网站后端系统，专注于创建一个充满个性和情感的数字空间。项目名为"月光花园"，致力于打造一个温柔、充满想象的个人网站。
+- Frontend: [../vvv](../vvv)
+- Website: [https://v1rtual.top/](https://v1rtual.top/)
+
+## 功能
+
+- 用户登录、JWT 鉴权、个人资料、头像、用户名和密码维护。
+- 首页配置、随机内容、Gallery 内容读取。
+- 图片、视频、GIF、音频等媒体的上传和管理。
+- Gallery 的列表、点赞、评论和评论点赞。
+- 管理员资源上传、OSS 同步、资源检索与首页编排。
+
+## API 模块
+
+| Path | 内容 |
+| --- | --- |
+| `/api/auth` | 登录 |
+| `/api/user` | 用户资料、头像、密码、访客计数 |
+| `/api/home` | 首页配置、随机内容、完整内容条目 |
+| `/api/gallery` | 媒体、列表、点赞、评论 |
+| `/api/oss` | OSS 上传 |
+| `/api/admin` | 资源同步、资源管理、首页配置 |
 
 ## 技术栈
 
-- **Java 21** - 高版本Java运行环境
-- **Spring Boot 3.5.9** - 企业级应用框架
-- **MyBatis 3.0.5** - 数据持久化框架
-- **MySQL** - 关系型数据库
-- **阿里云OSS** - 对象存储服务 (3.18.0)
-- **Spring Security** - 安全框架
-- **JWT** - 令牌认证
-- **Lombok** - 代码简化工具
+| 类别 | 组件 |
+| --- | --- |
+| Runtime | Java 21 |
+| Framework | Spring Boot 3 |
+| Security | Spring Security、JWT |
+| Persistence | MyBatis、MySQL |
+| Media | Aliyun OSS |
+| Build | Maven Wrapper |
 
-## 功能特性
+## 目录
 
-### ✅ 已实现功能
-
-#### 1. 用户系统
-- 用户注册/登录
-- JWT令牌认证
-- 用户信息管理
-
-#### 2. 画廊系统 (Gallery)
-- **批量媒体上传** - 支持图片、视频、音频、GIF
-- **自定义标题和描述** - 为每个上传的媒体添加个性化信息
-- **媒体类型识别** - 自动识别图片、视频、音频、GIF
-- **分页列表** - 支持按类型筛选的分页展示
-- **点赞系统** - 用户可以为媒体内容点赞
-- **评论系统** - 支持对媒体内容进行评论和点赞
-- **用户信息关联** - 显示上传者头像和用户名
-
-#### 3. 管理系统
-- **管理员功能** - 管理员可以手动上传资源
-- **首页配置** - 支持首页内容配置（主展示区、画廊项目、置顶博客等）
-- **内容管理** - 管理画廊、博客、音视频等资源
-
-#### 4. 安全与过滤
-- **JWT认证** - 基于令牌的安全认证
-- **移动端访问控制** - 可配置阻止移动端访问
-- **CORS配置** - 跨域资源共享支持
-
-#### 5. 配置管理
-- **OSS配置** - 阿里云对象存储配置
-- **安全配置** - Spring Security配置
-
-### 🚧 待实现功能
-
-#### 1. 博客系统 (Blog)
-- 博客文章的创建、编辑、发布
-- 博客内容管理（草稿、发布状态）
-- 博客分类和标签系统
-- 博客评论功能
-
-#### 2. 工具系统 (Tools)
-- 个人工具集合
-- 实用工具开发
-- 工具管理后台
-
-## 项目结构
-
-```
-src/
-├── main/
-│   ├── java/com/v1rtual/vvv_backend/
-│   │   ├── config/          # 配置类
-│   │   ├── controller/      # 控制器
-│   │   ├── entity/          # 实体类
-│   │   ├── filter/          # 过滤器
-│   │   ├── mapper/          # MyBatis映射
-│   │   ├── service/         # 服务层
-│   │   ├── util/            # 工具类
-│   │   └── vo/              # 视图对象
-│   └── resources/           # 配置文件
+```text
+src/main/
+├── java/com/v1rtual/vvv_backend/
+│   ├── config/        # Security、CORS、OSS、Web 配置
+│   ├── controller/    # API 入口
+│   ├── filter/        # JWT 与访问拦截
+│   ├── mapper/        # MyBatis 映射
+│   ├── service/       # 用户、Gallery、资源同步
+│   ├── entity/        # 用户、媒体、互动、首页配置
+│   └── vo/            # 请求与响应对象
+└── resources/         # 配置示例、静态拦截页
 ```
 
-## 核心模块
+## 本地运行
 
-### GalleryController
-- 处理媒体上传和管理
-- 提供分页列表接口
-- 实现点赞和评论功能
+要求：Java 21、MySQL、可用的 OSS 配置。
 
-### AuthController
-- 用户认证相关接口
-- 注册、登录、登出功能
+```bash
+cp src/main/resources/application-example.yml src/main/resources/application.yml
+./mvnw spring-boot:run
+```
 
-### AdminController
-- 管理员后台功能
-- 首页配置管理
+本地服务端口为 `8848`。
 
-### OssUtil
-- 阿里云OSS工具类
-- 文件上传和管理
+前端开发服务器运行在 `3001`，并将 `/api` 代理到此服务：
 
-## 部署说明
+```text
+http://localhost:3001/api -> http://127.0.0.1:8848
+```
 
-1. **环境要求**
-   - Java 21+
-   - MySQL 5.7+
-   - Maven 3.6+
+## 生产配置与发布
 
-2. **数据库配置**
-   - 执行 [1.sql](file://e:\WEB\someworks\vvv_backend\vvv.sql) 初始化数据库
-   - 配置 [application.yml](file://e:\WEB\someworks\vvv_backend\target\classes\application.yml) 中的数据库连接信息
+线上 Nginx 将 `/api/` 转发给 `127.0.0.1:8080`；后端 JAR 由 `spring_V1rtual.service` 运行。
 
-3. **OSS配置**
-   - 配置阿里云OSS相关信息
+生产配置位于服务器 `/etc/v1rtual/application-prod.yml`，包含数据库、OSS 和 JWT 设置，不提交到仓库。
 
-4. **启动项目**
-   ```bash
-   mvn spring-boot:run
-   ```
+每个分支代表一套完整网站版本。push 和 PR 只执行 CI 构建；部署由 GitHub Actions 手动选择分支执行。改动 API、鉴权、资源字段、环境或 Nginx 路由时，前后端应使用同名分支，分别通过 CI 后再联合验证。
 
-## 特色功能
-
-- **情感化设计** - 接口响应充满温暖和情感的提示语
-- **多媒体支持** - 支持图片、视频、音频、GIF等多种格式
-- **社交互动** - 点赞、评论系统增强用户互动
-- **个性化配置** - 丰富的首页配置选项
-
-## 未来规划
-
-- 实现完整的博客系统
-- 开发工具模块
-- 增加更多个性化功能
-- 优化用户体验和性能
-
-## 许可证
-
-MIT License
-
-## 关于
-
-这是一个充满个人情感和创意的项目，旨在打造一个独特的数字空间，让每个访问者都能感受到温暖和想象的力量。
+发布细节见 [CICD规范.md](CICD规范.md) 和 [skills/v1rtual-backend-cicd](skills/v1rtual-backend-cicd/SKILL.md)。

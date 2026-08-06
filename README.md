@@ -1,6 +1,6 @@
 # V1rtual Backend
 
-V1rtual 个人网站后端，当前分支版本为 `V1rtualSS`。
+V1rtual 个人网站后端。`V1rtualSS` 是当前站点版本分支，`main` 汇总已合并的稳定代码。
 
 - Frontend: [V1rtuallll/vvv-front-end](https://github.com/V1rtuallll/vvv-front-end/tree/V1rtualSS)
 - Website: [https://v1rtual.top/](https://v1rtual.top/)
@@ -41,14 +41,27 @@ V1rtual 个人网站后端，当前分支版本为 `V1rtualSS`。
 src/main/
 ├── java/com/v1rtual/vvv_backend/
 │   ├── config/        # Security、CORS、OSS、Web 配置
-│   ├── controller/    # API 入口
+│   ├── controller/    # 公共 API 入口
+│   │   └── admin/     # 首页配置、媒体资源、OSS 同步入口
 │   ├── filter/        # JWT 与访问拦截
 │   ├── mapper/        # MyBatis 映射
-│   ├── service/       # 用户、Gallery、资源同步
+│   ├── security/      # 当前用户与站点所有者判断
+│   ├── service/       # 通用服务与资源同步
+│   │   ├── admin/     # 管理端首页配置与媒体资源
+│   │   ├── gallery/   # Gallery 查询、上传与互动
+│   │   ├── home/      # 首页内容查询
+│   │   └── user/      # 用户资料维护
 │   ├── entity/        # 用户、媒体、互动、首页配置
 │   └── vo/            # 请求与响应对象
 └── resources/         # 配置示例、静态拦截页
+src/test/              # Spring 上下文、管理员权限与路由契约测试
 ```
+
+## 接口与服务边界
+
+- Controller 只处理 HTTP 参数、所有者校验和 Service 调用；管理端仍使用 `/api/admin/**` 原路径。
+- `CurrentUserProvider` 统一从 SecurityContext 解析当前用户；`OwnerAccess` 只允许用户名精确为 `V1rtual` 的用户管理站点。
+- Service 按 admin、gallery、home、user 能力拆分，Mapper 与数据模型未在本轮调整。
 
 ## 本地运行
 
@@ -60,6 +73,12 @@ cp src/main/resources/application-example.yml src/main/resources/application.yml
 ```
 
 本地服务端口为 `8848`。
+
+```bash
+./mvnw test
+```
+
+该命令会校验 Spring 上下文、所有者用户名约束，以及六条管理接口路由仍保持原有 HTTP 方法和路径。
 
 前端开发服务器运行在 `3001`，并将 `/api` 代理到此服务：
 

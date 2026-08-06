@@ -6,8 +6,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,6 +18,7 @@ import com.v1rtual.vvv_backend.mapper.GifMapper;
 import com.v1rtual.vvv_backend.mapper.MusicMapper;
 import com.v1rtual.vvv_backend.mapper.PhotoMapper;
 import com.v1rtual.vvv_backend.mapper.VideoMapper;
+import com.v1rtual.vvv_backend.security.CurrentUserProvider;
 import com.v1rtual.vvv_backend.util.OssUtil;
 
 import lombok.RequiredArgsConstructor;
@@ -35,21 +34,7 @@ public class ResourceSyncService {
   private final GifMapper gifMapper;
   private final MusicMapper musicMapper;
   private final PhotoMapper photoMapper;
-  private final UserService userService;
-
-  // 在 syncOssToDatabase 方法开头加
-  private User getCurrentUserFromContext() {
-    Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-    if (auth != null && auth.getPrincipal() instanceof User) {
-      return (User) auth.getPrincipal();
-    }
-    // 如果 principal 是 String（username），可以再查一次
-    if (auth != null && auth.getPrincipal() instanceof String) {
-      String username = (String) auth.getPrincipal();
-      return userService.findByUsername(username); // 需要注入 UserService
-    }
-    return null;
-  }
+  private final CurrentUserProvider currentUserProvider;
 
   /**
    * 一键同步 OSS → 数据库（支持 video、gif、music、photo 四种类型）
@@ -57,7 +42,7 @@ public class ResourceSyncService {
   @Transactional(rollbackFor = Exception.class)
   public int syncOssToDatabase(List<String> types) {
     int totalInserted = 0;
-    User current = getCurrentUserFromContext();
+    User current = currentUserProvider.getCurrentUser().orElse(null);
     Long uploaderId = (current != null) ? current.getId() : -1;
     String uploaderName = (current != null) ? current.getUsername() : "未知";
 

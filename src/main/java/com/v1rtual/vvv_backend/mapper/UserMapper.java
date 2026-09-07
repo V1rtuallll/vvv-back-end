@@ -39,7 +39,7 @@ public interface UserMapper {
    * @param user
    * @return 影响的行数
    */
-  @Update("UPDATE user SET password = #{password}, description = #{description}, " +
+  @Update("UPDATE user SET username = #{username}, password = #{password}, description = #{description}, " +
       "sex = #{sex}, avatar = #{avatar} WHERE id = #{id}")
   int update(User user);
 

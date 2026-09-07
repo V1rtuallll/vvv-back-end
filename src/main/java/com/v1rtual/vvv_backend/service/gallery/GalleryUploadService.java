@@ -1,6 +1,8 @@
 package com.v1rtual.vvv_backend.service.gallery;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Service;
@@ -19,6 +21,7 @@ import com.v1rtual.vvv_backend.mapper.GifMapper;
 import com.v1rtual.vvv_backend.mapper.MusicMapper;
 import com.v1rtual.vvv_backend.mapper.PhotoMapper;
 import com.v1rtual.vvv_backend.mapper.VideoMapper;
+import com.v1rtual.vvv_backend.service.media.UploadValidator;
 import com.v1rtual.vvv_backend.util.OssUtil;
 import com.v1rtual.vvv_backend.vo.Result;
 
@@ -36,6 +39,7 @@ public class GalleryUploadService {
   private final GifMapper gifMapper;
   private final VideoMapper videoMapper;
   private final MusicMapper musicMapper;
+  private final UploadValidator uploadValidator;
 
   @Transactional
   public Result<Void> upload(MultipartFile[] files, String[] titles, String[] descriptions, User user) {
@@ -47,65 +51,62 @@ public class GalleryUploadService {
     }
 
     int successCount = 0;
-    for (int i = 0; i < files.length; i++) {
-      MultipartFile file = files[i];
-      if (file.isEmpty()) {
-        continue;
-      }
+    List<String> uploadedUrls = new ArrayList<>();
+    try {
+      for (int i = 0; i < files.length; i++) {
+        MultipartFile file = files[i];
+        if (file == null || file.isEmpty()) {
+          continue;
+        }
 
-      String title = titles != null && i < titles.length ? titles[i] : null;
-      if (StringUtils.isBlank(title)) {
-        title = file.getOriginalFilename();
-      }
-      String description = descriptions != null && i < descriptions.length && StringUtils.isNotBlank(descriptions[i])
-          ? descriptions[i]
-          : "";
+        ResourceType type;
+        try {
+          type = uploadValidator.validateAndResolveMedia(file);
+        } catch (IllegalArgumentException e) {
+          log.warn("跳过不支持的文件 {}: {}", file.getOriginalFilename(), e.getMessage());
+          continue;
+        }
 
-      ResourceType type;
-      try {
-        type = determineType(file.getContentType());
-      } catch (IllegalArgumentException e) {
-        log.warn("不支持的文件类型: {}", file.getContentType());
-        continue;
-      }
+        String title = titles != null && i < titles.length ? titles[i] : null;
+        if (StringUtils.isBlank(title)) title = file.getOriginalFilename();
+        String description = descriptions != null && i < descriptions.length && StringUtils.isNotBlank(descriptions[i])
+            ? descriptions[i] : "";
 
-      String url;
-      try {
-        url = ossUtil.upload(file, typeToDirectory(type));
-      } catch (IOException e) {
-        log.error("上传文件失败: {}", file.getOriginalFilename(), e);
-        continue;
+        String url;
+        try {
+          url = ossUtil.upload(file, typeToDirectory(type));
+        } catch (IOException e) {
+          log.error("上传文件失败: {}", file.getOriginalFilename(), e);
+          continue;
+        }
+        if (StringUtils.isBlank(url)) {
+          log.error("上传文件未返回 URL: {}", file.getOriginalFilename());
+          continue;
+        }
+        uploadedUrls.add(url);
+        if (galleryMapper.insert(Gallery.builder()
+            .type(type)
+            .title(title)
+            .description(description)
+            .src(url)
+            .userId(user.getId())
+            .uploaderUsername(user.getUsername())
+            .build()) != 1) {
+          throw new IllegalStateException("Gallery 资源入库失败");
+        }
+        if (insertTypedMedia(type, title, description, url, user) != 1) {
+          throw new IllegalStateException("媒体资源入库失败");
+        }
+        successCount++;
       }
-      if (StringUtils.isBlank(url)) {
-        continue;
+      if (successCount == 0) {
+        return Result.error("所有文件上传失败啦～QAQ");
       }
-
-      galleryMapper.insert(Gallery.builder()
-          .type(type)
-          .title(title)
-          .description(description)
-          .src(url)
-          .userId(user.getId())
-          .uploaderUsername(user.getUsername())
-          .build());
-      successCount++;
-
-      insertTypedMedia(type, title, description, url, user);
-      successCount++;
+      return Result.success("上传成功！V1rtual多了" + successCount + "片记忆～✨");
+    } catch (RuntimeException e) {
+      uploadedUrls.forEach(this::cleanupUploadedFile);
+      throw e;
     }
-
-    if (successCount == 0) {
-      return Result.error("所有文件上传失败啦～QAQ");
-    }
-    return Result.success("上传成功！V1rtual多了" + successCount + "片记忆～✨");
-  }
-
-  private ResourceType determineType(String contentType) {
-    if (contentType == null) throw new IllegalArgumentException("文件类型未知");
-    if (contentType.startsWith("image/")) return contentType.equals("image/gif") ? ResourceType.gif : ResourceType.photo;
-    if (contentType.startsWith("video/")) return ResourceType.video;
-    if (contentType.startsWith("audio/")) return ResourceType.music;
-    throw new IllegalArgumentException("不支持的文件类型");
   }
 
   private OssUtil.FileType typeToDirectory(ResourceType type) {
@@ -117,8 +118,8 @@ public class GalleryUploadService {
     };
   }
 
-  private void insertTypedMedia(ResourceType type, String title, String description, String url, User user) {
-    switch (type) {
+  private int insertTypedMedia(ResourceType type, String title, String description, String url, User user) {
+    return switch (type) {
       case photo -> photoMapper.insert(Photo.builder().title(title).description(description).src(url)
           .uploaderId(user.getId()).uploaderUsername(user.getUsername()).category(null).viewCount(0L).likes(0L).build());
       case gif -> gifMapper.insert(Gif.builder().title(title).description(description).src(url)
@@ -127,6 +128,14 @@ public class GalleryUploadService {
           .uploaderId(user.getId()).uploaderUsername(user.getUsername()).viewCount(0L).build());
       case music -> musicMapper.insert(Music.builder().title(title).description(description).src(url)
           .uploaderId(user.getId()).uploaderUsername(user.getUsername()).viewCount(0L).build());
+    };
+  }
+
+  private void cleanupUploadedFile(String url) {
+    try {
+      ossUtil.deleteByPublicUrl(url);
+    } catch (Exception cleanupError) {
+      log.error("Gallery 上传失败后的 OSS 清理失败: {}", url, cleanupError);
     }
   }
 }

@@ -1,8 +1,6 @@
 package com.v1rtual.vvv_backend.service.admin;
 
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -14,12 +12,15 @@ import org.springframework.web.multipart.MultipartFile;
 import com.v1rtual.vvv_backend.entity.Gif;
 import com.v1rtual.vvv_backend.entity.Music;
 import com.v1rtual.vvv_backend.entity.Photo;
+import com.v1rtual.vvv_backend.entity.ResourceType;
 import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.entity.Video;
+import com.v1rtual.vvv_backend.mapper.AdminMediaMapper;
 import com.v1rtual.vvv_backend.mapper.GifMapper;
 import com.v1rtual.vvv_backend.mapper.MusicMapper;
 import com.v1rtual.vvv_backend.mapper.PhotoMapper;
 import com.v1rtual.vvv_backend.mapper.VideoMapper;
+import com.v1rtual.vvv_backend.service.media.UploadValidator;
 import com.v1rtual.vvv_backend.util.OssUtil;
 import com.v1rtual.vvv_backend.vo.Result;
 
@@ -36,51 +37,50 @@ public class AdminMediaService {
   private final GifMapper gifMapper;
   private final MusicMapper musicMapper;
   private final PhotoMapper photoMapper;
+  private final AdminMediaMapper adminMediaMapper;
+  private final UploadValidator uploadValidator;
 
   public Result<Map<String, String>> upload(MultipartFile file, User currentUser) {
     if (file == null || file.isEmpty()) {
       return Result.error("文件不能为空哦～");
     }
 
-    String contentType = file.getContentType();
-    if (contentType == null) {
-      return Result.error("无法识别文件类型");
+    ResourceType mediaType;
+    try {
+      mediaType = uploadValidator.validateAndResolveMedia(file);
+    } catch (IllegalArgumentException e) {
+      return Result.error(e.getMessage());
     }
-
-    OssUtil.FileType targetDir = resolveFileType(contentType);
-    if (targetDir == null) {
-      return Result.error("不支持的文件类型～只接受图片/视频/GIF/音乐");
-    }
+    OssUtil.FileType targetDir = toOssFileType(mediaType);
 
     Long uploaderId = currentUser != null ? currentUser.getId() : 0L;
     String uploaderName = currentUser != null ? currentUser.getUsername() : "V1rtual";
+    String url = null;
     try {
-      String url = ossUtil.upload(file, targetDir);
-      insertMedia(targetDir, file.getOriginalFilename(), url, uploaderId, uploaderName);
+      url = ossUtil.upload(file, targetDir);
+      if (insertMedia(targetDir, file.getOriginalFilename(), url, uploaderId, uploaderName) != 1) {
+        cleanupUploadedFile(url);
+        return Result.error("资源入库失败");
+      }
       return Result.success(Map.of("url", url, "type", targetDir.name().toLowerCase()),
           "上传成功并已入库！上传者：" + uploaderName + "✨");
     } catch (Exception e) {
+      if (url != null) cleanupUploadedFile(url);
       log.error("上传失败", e);
       return Result.error("上传失败: " + e.getMessage());
     }
   }
 
   public Result<Map<String, Object>> list(String type, int page, int limit) {
-    List<Map<String, Object>> list = new ArrayList<>();
+    if (page < 1 || limit < 1) return Result.error("分页参数无效");
+    List<Map<String, Object>> list;
     long total = 0;
     int offset = (page - 1) * limit;
 
     try {
       if (StringUtils.isBlank(type) || "all".equalsIgnoreCase(type)) {
-        list.addAll(photoMapper.selectPage(offset, limit));
-        list.addAll(gifMapper.selectPage(offset, limit));
-        list.addAll(videoMapper.selectPage(offset, limit));
-        list.addAll(musicMapper.selectPage(offset, limit));
-        total = photoMapper.countAll() + gifMapper.countAll() + videoMapper.countAll() + musicMapper.countAll();
-        list.sort((a, b) -> ((LocalDateTime) b.get("created_at")).compareTo((LocalDateTime) a.get("created_at")));
-        int from = (page - 1) * limit;
-        int to = Math.min(from + limit, list.size());
-        list = from < list.size() ? list.subList(from, to) : Collections.emptyList();
+        list = adminMediaMapper.selectAllPage(offset, limit);
+        total = adminMediaMapper.countAll();
       } else {
         switch (type.toLowerCase()) {
           case "photo" -> {
@@ -115,7 +115,9 @@ public class AdminMediaService {
   }
 
   public Result<Void> update(Map<String, Object> body) {
-    Integer id = (Integer) body.get("id");
+    if (body == null) return Result.error("请求参数不能为空哦～");
+    Object rawId = body.get("id");
+    Long id = rawId instanceof Number number ? number.longValue() : null;
     String type = (String) body.get("type");
     if (id == null || StringUtils.isBlank(type)) {
       return Result.error("ID 或类型不能为空哦～");
@@ -123,10 +125,10 @@ public class AdminMediaService {
 
     try {
       switch (type.toLowerCase()) {
-        case "photo" -> updatePhoto(id.longValue(), body);
-        case "gif" -> updateGif(id.longValue(), body);
-        case "video" -> updateVideo(id.longValue(), body);
-        case "music" -> updateMusic(id.longValue(), body);
+        case "photo" -> updatePhoto(id, body);
+        case "gif" -> updateGif(id, body);
+        case "video" -> updateVideo(id, body);
+        case "music" -> updateMusic(id, body);
         default -> {
           return Result.error("不支持的类型～");
         }
@@ -140,17 +142,18 @@ public class AdminMediaService {
     }
   }
 
-  private OssUtil.FileType resolveFileType(String contentType) {
-    if (contentType.startsWith("video/")) return OssUtil.FileType.VIDEO;
-    if (contentType.equals("image/gif")) return OssUtil.FileType.GIF;
-    if (contentType.startsWith("image/")) return OssUtil.FileType.IMGS;
-    if (contentType.startsWith("audio/")) return OssUtil.FileType.MUSIC;
-    return null;
+  private OssUtil.FileType toOssFileType(ResourceType type) {
+    return switch (type) {
+      case photo -> OssUtil.FileType.IMGS;
+      case gif -> OssUtil.FileType.GIF;
+      case video -> OssUtil.FileType.VIDEO;
+      case music -> OssUtil.FileType.MUSIC;
+    };
   }
 
-  private void insertMedia(OssUtil.FileType type, String title, String url, Long uploaderId, String uploaderName) {
+  private int insertMedia(OssUtil.FileType type, String title, String url, Long uploaderId, String uploaderName) {
     LocalDateTime now = LocalDateTime.now();
-    switch (type) {
+    return switch (type) {
       case VIDEO -> videoMapper.insert(Video.builder().src(url).title(title).description("管理员手动上传 - " + url)
           .createdAt(now).updatedAt(now).uploaderId(uploaderId).uploaderUsername(uploaderName).build());
       case GIF -> gifMapper.insert(Gif.builder().src(url).title(title).description("管理员手动上传 - " + url)
@@ -159,6 +162,14 @@ public class AdminMediaService {
           .createdAt(now).updatedAt(now).uploaderId(uploaderId).uploaderUsername(uploaderName).build());
       case IMGS -> photoMapper.insert(Photo.builder().src(url).title(title).description("管理员手动上传 - " + url)
           .createdAt(now).updatedAt(now).uploaderId(uploaderId).uploaderUsername(uploaderName).build());
+    };
+  }
+
+  private void cleanupUploadedFile(String url) {
+    try {
+      ossUtil.deleteByPublicUrl(url);
+    } catch (Exception cleanupError) {
+      log.error("管理上传入库失败后的 OSS 清理失败: {}", url, cleanupError);
     }
   }
 

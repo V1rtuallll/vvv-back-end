@@ -8,7 +8,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.v1rtual.vvv_backend.entity.User;
+import com.v1rtual.vvv_backend.service.media.UploadValidator;
 import com.v1rtual.vvv_backend.service.UserService;
+import com.v1rtual.vvv_backend.util.JwtUtil;
 import com.v1rtual.vvv_backend.util.OssUtil;
 import com.v1rtual.vvv_backend.vo.Result;
 
@@ -23,19 +25,26 @@ public class UserProfileService {
   private final UserService userService;
   private final PasswordEncoder passwordEncoder;
   private final OssUtil ossUtil;
+  private final UploadValidator uploadValidator;
+  private final JwtUtil jwtUtil;
 
   public Result<String> uploadAvatar(MultipartFile file, User currentUser) {
-    if (file.isEmpty()) return Result.error("请选择一张图片哦～");
-    if (file.getSize() > 10 * 1024 * 1024) return Result.error("图片太大啦～");
     if (currentUser == null) return Result.error("请先登录哦～");
-
     try {
-      String url = ossUtil.upload(file, OssUtil.FileType.IMGS);
+      uploadValidator.validateAvatar(file);
+    } catch (IllegalArgumentException e) {
+      return Result.error(e.getMessage());
+    }
+
+    String url = null;
+    try {
+      url = ossUtil.upload(file, OssUtil.FileType.IMGS);
       currentUser.setAvatar(url);
       userService.update(currentUser);
       log.info("{}更换头像成功～URL: {}", currentUser.getUsername(), url);
       return Result.success(url, "头像已更换～");
     } catch (Exception e) {
+      cleanupUploadedFile(url);
       log.error("头像上传失败～", e);
       return Result.error("上传失败了～再试试？");
     }
@@ -51,7 +60,7 @@ public class UserProfileService {
     currentUser.setUsername(newUsername);
     userService.update(currentUser);
     log.info("{}变更为{}～", oldUsername, newUsername);
-    return Result.success(newUsername, "用户名已变更～");
+    return Result.success(jwtUtil.generateToken(newUsername), "用户名已变更～");
   }
 
   public Result<String> updatePassword(Map<String, String> body, User currentUser) {
@@ -100,5 +109,14 @@ public class UserProfileService {
   private Result<User> publicUser(User user, String message) {
     user.setPassword(null);
     return Result.success(user, message);
+  }
+
+  private void cleanupUploadedFile(String url) {
+    if (url == null) return;
+    try {
+      ossUtil.deleteByPublicUrl(url);
+    } catch (Exception cleanupError) {
+      log.error("头像上传失败后的 OSS 清理失败: {}", url, cleanupError);
+    }
   }
 }

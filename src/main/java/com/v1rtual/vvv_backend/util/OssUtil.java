@@ -13,6 +13,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
@@ -117,6 +118,12 @@ public class OssUtil {
   public void delete(String fileName) {
     ossClient.deleteObject(bucketName, fileName);
     log.info("文件已轻轻离去～路径：{}", fileName);
+  }
+
+  public void deleteByPublicUrl(String publicUrl) {
+    String path = URI.create(publicUrl).getPath();
+    if (path == null || path.length() <= 1) throw new IllegalArgumentException("OSS 文件地址无效");
+    delete(path.substring(1));
   }
 
   /**

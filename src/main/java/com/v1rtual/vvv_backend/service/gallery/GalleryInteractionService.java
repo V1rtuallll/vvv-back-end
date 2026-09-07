@@ -2,6 +2,7 @@ package com.v1rtual.vvv_backend.service.gallery;
 
 import java.util.Map;
 
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -35,15 +36,31 @@ public class GalleryInteractionService {
 
   public Result<Void> comment(Map<String, Object> body, User user) {
     if (user == null) return Result.error("请先登录才能评论哦～");
+    Object rawContent = body == null ? null : body.get("content");
+    if (!(rawContent instanceof String content) || StringUtils.isBlank(content)) {
+      return Result.error("评论内容不能为空哦～");
+    }
+    Long targetId = toLong(body.get("target_id"));
+    if (targetId == null || galleryMapper.selectById(targetId) == null) {
+      return Result.error("评论目标不存在哦～");
+    }
+    Long parentId = body.containsKey("parent_id") ? toLong(body.get("parent_id")) : null;
+    if (body.containsKey("parent_id") && parentId == null) return Result.error("父评论 ID 无效哦～");
     Comment comment = Comment.builder()
-        .content((String) body.get("content"))
+        .content(content.trim())
         .userId(user.getId())
         .username(user.getUsername())
-        .targetId(Long.valueOf(body.get("target_id").toString()))
-        .parentId(body.containsKey("parent_id") ? Long.valueOf(body.get("parent_id").toString()) : null)
+        .targetId(targetId)
+        .parentId(parentId)
         .build();
     commentMapper.insert(comment);
     return Result.success("评论成功～");
+  }
+
+  private Long toLong(Object value) {
+    if (value instanceof Number number) return number.longValue();
+    if (value instanceof String text && StringUtils.isNumeric(text)) return Long.valueOf(text);
+    return null;
   }
 
   @Transactional

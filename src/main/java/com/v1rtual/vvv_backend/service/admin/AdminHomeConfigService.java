@@ -11,7 +11,10 @@ import org.springframework.stereotype.Service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.v1rtual.vvv_backend.entity.HomeConfig;
+import com.v1rtual.vvv_backend.mapper.GifMapper;
 import com.v1rtual.vvv_backend.mapper.HomeConfigMapper;
+import com.v1rtual.vvv_backend.mapper.PhotoMapper;
+import com.v1rtual.vvv_backend.mapper.VideoMapper;
 import com.v1rtual.vvv_backend.vo.HomeConfigSaveVO;
 import com.v1rtual.vvv_backend.vo.Result;
 
@@ -25,6 +28,9 @@ public class AdminHomeConfigService {
 
   private final HomeConfigMapper homeConfigMapper;
   private final ObjectMapper objectMapper;
+  private final VideoMapper videoMapper;
+  private final GifMapper gifMapper;
+  private final PhotoMapper photoMapper;
 
   public Result<Void> save(HomeConfigSaveVO vo) {
     HomeConfig config = new HomeConfig();
@@ -74,8 +80,9 @@ public class AdminHomeConfigService {
 
     Map<String, Object> result = new HashMap<>();
     boolean random = config.getMainRandom() != null && config.getMainRandom() == 1;
+    String mainType = StringUtils.defaultString(config.getMainType(), "video");
     result.put("main", Map.of(
-        "type", StringUtils.defaultString(config.getMainType(), "video"),
+        "type", mainType,
         "src", StringUtils.defaultString(config.getMainSrc(), "https://example.com/default-video.mp4"),
         "title", StringUtils.defaultString(config.getMainTitle(), "V1rtual"),
         "desc", StringUtils.defaultString(config.getMainDesc(), "Welcome"),
@@ -91,6 +98,16 @@ public class AdminHomeConfigService {
       }
     }
     result.put("galleryItems", gallery);
+    result.put("availableFiles", availableFilesFor(mainType));
     return Result.success(result, "Home 配置加载成功～");
+  }
+
+  private List<String> availableFilesFor(String mainType) {
+    return switch (mainType.toLowerCase()) {
+      case "video" -> videoMapper.selectAllSrcs();
+      case "gif" -> gifMapper.selectAllSrcs();
+      case "image", "photo" -> photoMapper.selectAllSrcs();
+      default -> List.of();
+    };
   }
 }

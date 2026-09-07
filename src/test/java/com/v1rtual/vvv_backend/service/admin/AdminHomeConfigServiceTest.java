@@ -29,11 +29,19 @@ class AdminHomeConfigServiceTest {
     when(configMapper.getHomeConfig()).thenReturn(config);
     VideoMapper videoMapper = mock(VideoMapper.class);
     when(videoMapper.selectAllSrcs()).thenReturn(List.of("https://example.test/video.mp4"));
+    GifMapper gifMapper = mock(GifMapper.class);
+    when(gifMapper.selectAllSrcs()).thenReturn(List.of("https://example.test/animation.gif"));
+    PhotoMapper photoMapper = mock(PhotoMapper.class);
+    when(photoMapper.selectAllSrcs()).thenReturn(List.of("https://example.test/photo.png"));
     AdminHomeConfigService service = new AdminHomeConfigService(configMapper, new ObjectMapper(), videoMapper,
-        mock(GifMapper.class), mock(PhotoMapper.class));
+        gifMapper, photoMapper);
 
     Result<Map<String, Object>> result = service.get();
 
     assertEquals(List.of("https://example.test/video.mp4"), result.getData().get("availableFiles"));
+    @SuppressWarnings("unchecked")
+    Map<String, List<String>> filesByType = (Map<String, List<String>>) result.getData().get("availableFilesByType");
+    assertEquals(List.of("https://example.test/animation.gif"), filesByType.get("gif"));
+    assertEquals(List.of("https://example.test/photo.png"), filesByType.get("image"));
   }
 }

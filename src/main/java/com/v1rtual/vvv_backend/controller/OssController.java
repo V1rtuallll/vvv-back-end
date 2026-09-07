@@ -2,6 +2,7 @@ package com.v1rtual.vvv_backend.controller;
 
 import com.v1rtual.vvv_backend.entity.ResourceType;
 import com.v1rtual.vvv_backend.service.media.UploadValidator;
+import com.v1rtual.vvv_backend.service.media.MediaTypeDirectory;
 import com.v1rtual.vvv_backend.util.OssUtil;
 import com.v1rtual.vvv_backend.vo.Result;
 import lombok.RequiredArgsConstructor;
@@ -45,7 +46,7 @@ public class OssController {
         case "video" -> OssUtil.FileType.VIDEO;
         default -> throw new IllegalArgumentException("不支持的类型哦～目前支持 imgs/music/gif/video");
       };
-      OssUtil.FileType resolvedType = toOssFileType(mediaType);
+      OssUtil.FileType resolvedType = MediaTypeDirectory.directoryFor(mediaType);
       if (requestedType != resolvedType) return Result.error("请求类型与文件实际类型不一致");
       return uploadToOss(file, type, resolvedType);
     } catch (Exception e) {
@@ -64,12 +65,4 @@ public class OssController {
     }
   }
 
-  private OssUtil.FileType toOssFileType(ResourceType type) {
-    return switch (type) {
-      case photo -> OssUtil.FileType.IMGS;
-      case gif -> OssUtil.FileType.GIF;
-      case video -> OssUtil.FileType.VIDEO;
-      case music -> OssUtil.FileType.MUSIC;
-    };
-  }
 }

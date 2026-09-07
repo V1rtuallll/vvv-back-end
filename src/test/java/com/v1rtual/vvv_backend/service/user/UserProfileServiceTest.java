@@ -38,4 +38,23 @@ class UserProfileServiceTest {
     assertEquals("replacement-token", result.getData());
     verify(userService).update(currentUser);
   }
+
+  @Test
+  void normalizesTheUsernameBeforeCheckingAndPersistingIt() {
+    UserService userService = mock(UserService.class);
+    JwtUtil jwtUtil = mock(JwtUtil.class);
+    when(userService.findByUsername("renamed")).thenReturn(null);
+    when(jwtUtil.generateToken("renamed")).thenReturn("replacement-token");
+    UserProfileService service = new UserProfileService(userService, mock(PasswordEncoder.class), mock(OssUtil.class),
+        new UploadValidator(new MultipartProperties()), jwtUtil);
+    User currentUser = new User();
+    currentUser.setId(1L);
+    currentUser.setUsername("original");
+
+    service.updateUsername(Map.of("username", "  renamed  "), currentUser);
+
+    assertEquals("renamed", currentUser.getUsername());
+    verify(userService).findByUsername("renamed");
+    verify(jwtUtil).generateToken("renamed");
+  }
 }

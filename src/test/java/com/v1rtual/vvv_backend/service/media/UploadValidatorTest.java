@@ -26,4 +26,13 @@ class UploadValidatorTest {
 
     assertThrows(IllegalArgumentException.class, () -> validator.validateAndResolveMedia(file));
   }
+
+  @Test
+  void rejectsWaveDataPretendingToBeAnAviVideo() {
+    UploadValidator validator = new UploadValidator(new MultipartProperties());
+    MockMultipartFile file = new MockMultipartFile("file", "clip.avi", "video/x-msvideo",
+        new byte[] {'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'A', 'V', 'E'});
+
+    assertThrows(IllegalArgumentException.class, () -> validator.validateAndResolveMedia(file));
+  }
 }

@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.v1rtual.vvv_backend.entity.Comment;
+import com.v1rtual.vvv_backend.entity.TargetType;
 import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.mapper.CommentLikeMapper;
 import com.v1rtual.vvv_backend.mapper.CommentMapper;
@@ -46,6 +47,12 @@ public class GalleryInteractionService {
     }
     Long parentId = body.containsKey("parent_id") ? toLong(body.get("parent_id")) : null;
     if (body.containsKey("parent_id") && parentId == null) return Result.error("父评论 ID 无效哦～");
+    if (parentId != null) {
+      Comment parent = commentMapper.selectById(parentId);
+      if (parent == null || parent.getTargetType() != TargetType.gallery || !targetId.equals(parent.getTargetId())) {
+        return Result.error("父评论不属于当前资源哦～");
+      }
+    }
     Comment comment = Comment.builder()
         .content(content.trim())
         .userId(user.getId())

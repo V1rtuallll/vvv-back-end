@@ -20,6 +20,9 @@ public interface CommentMapper {
   @Options(useGeneratedKeys = true, keyProperty = "id")
   int insert(Comment comment);
 
+  @Select("SELECT * FROM comment WHERE id = #{id}")
+  Comment selectById(Long id);
+
   @Select("SELECT * FROM comment " +
       "WHERE target_type = 'gallery' AND target_id = #{targetId} " +
       "ORDER BY created_at DESC")

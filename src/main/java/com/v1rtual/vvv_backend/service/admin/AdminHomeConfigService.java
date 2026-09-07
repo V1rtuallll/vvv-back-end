@@ -98,16 +98,20 @@ public class AdminHomeConfigService {
       }
     }
     result.put("galleryItems", gallery);
-    result.put("availableFiles", availableFilesFor(mainType));
+    Map<String, List<String>> availableFilesByType = Map.of(
+        "video", filesOrEmpty(videoMapper.selectAllSrcs()),
+        "gif", filesOrEmpty(gifMapper.selectAllSrcs()),
+        "image", filesOrEmpty(photoMapper.selectAllSrcs()));
+    result.put("availableFilesByType", availableFilesByType);
+    result.put("availableFiles", availableFilesByType.getOrDefault(normalizeMainType(mainType), List.of()));
     return Result.success(result, "Home 配置加载成功～");
   }
 
-  private List<String> availableFilesFor(String mainType) {
-    return switch (mainType.toLowerCase()) {
-      case "video" -> videoMapper.selectAllSrcs();
-      case "gif" -> gifMapper.selectAllSrcs();
-      case "image", "photo" -> photoMapper.selectAllSrcs();
-      default -> List.of();
-    };
+  private String normalizeMainType(String mainType) {
+    return "photo".equalsIgnoreCase(mainType) ? "image" : mainType.toLowerCase();
+  }
+
+  private List<String> filesOrEmpty(List<String> files) {
+    return files == null ? List.of() : files;
   }
 }

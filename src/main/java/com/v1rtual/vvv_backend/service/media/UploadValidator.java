@@ -29,15 +29,16 @@ public class UploadValidator {
     String contentType = normalizeContentType(file);
     String extension = extension(file);
 
-    if ("image/gif".equals(contentType) && "gif".equals(extension) && hasExpectedSignature(file, ResourceType.gif)) {
+    if ("image/gif".equals(contentType) && "gif".equals(extension)
+        && hasExpectedSignature(file, ResourceType.gif, extension)) {
       return ResourceType.gif;
     }
     if (contentType.startsWith("image/") && PHOTO_EXTENSIONS.contains(extension)
-        && hasExpectedSignature(file, ResourceType.photo)) return ResourceType.photo;
+        && hasExpectedSignature(file, ResourceType.photo, extension)) return ResourceType.photo;
     if (contentType.startsWith("video/") && VIDEO_EXTENSIONS.contains(extension)
-        && hasExpectedSignature(file, ResourceType.video)) return ResourceType.video;
+        && hasExpectedSignature(file, ResourceType.video, extension)) return ResourceType.video;
     if (contentType.startsWith("audio/") && MUSIC_EXTENSIONS.contains(extension)
-        && hasExpectedSignature(file, ResourceType.music)) return ResourceType.music;
+        && hasExpectedSignature(file, ResourceType.music, extension)) return ResourceType.music;
     throw new IllegalArgumentException("文件类型与扩展名不匹配或不受支持");
   }
 
@@ -70,21 +71,50 @@ public class UploadValidator {
     return filename.substring(separator + 1).toLowerCase(Locale.ROOT);
   }
 
-  private boolean hasExpectedSignature(MultipartFile file, ResourceType type) {
+  private boolean hasExpectedSignature(MultipartFile file, ResourceType type, String extension) {
     byte[] header = new byte[16];
     try (InputStream input = file.getInputStream()) {
       int length = input.read(header);
       if (length < 3) return false;
       return switch (type) {
-        case photo -> isJpeg(header, length) || isPng(header, length) || isWebp(header, length) || isBmp(header, length);
+        case photo -> matchesPhotoSignature(header, length, extension);
         case gif -> isPrefix(header, length, "GIF87a") || isPrefix(header, length, "GIF89a");
-        case video -> isMp4OrMov(header, length) || isPrefix(header, length, "RIFF") || hasEbmlHeader(header, length);
-        case music -> isPrefix(header, length, "ID3") || isPrefix(header, length, "fLaC")
-            || isPrefix(header, length, "OggS") || isWave(header, length) || isMpegAudio(header, length);
+        case video -> matchesVideoSignature(header, length, extension);
+        case music -> matchesMusicSignature(header, length, extension);
       };
     } catch (IOException e) {
       throw new IllegalArgumentException("无法读取上传文件", e);
     }
+  }
+
+  private boolean matchesPhotoSignature(byte[] header, int length, String extension) {
+    return switch (extension) {
+      case "jpg", "jpeg" -> isJpeg(header, length);
+      case "png" -> isPng(header, length);
+      case "webp" -> isWebp(header, length);
+      case "bmp" -> isBmp(header, length);
+      default -> false;
+    };
+  }
+
+  private boolean matchesVideoSignature(byte[] header, int length, String extension) {
+    return switch (extension) {
+      case "mp4", "mov" -> isMp4OrMov(header, length);
+      case "avi" -> isAvi(header, length);
+      case "webm", "mkv" -> hasEbmlHeader(header, length);
+      default -> false;
+    };
+  }
+
+  private boolean matchesMusicSignature(byte[] header, int length, String extension) {
+    return switch (extension) {
+      case "mp3" -> isPrefix(header, length, "ID3") || isMpegAudio(header, length);
+      case "wav" -> isWave(header, length);
+      case "flac" -> isPrefix(header, length, "fLaC");
+      case "aac" -> isMpegAudio(header, length);
+      case "ogg" -> isPrefix(header, length, "OggS");
+      default -> false;
+    };
   }
 
   private boolean isJpeg(byte[] header, int length) {
@@ -105,6 +135,10 @@ public class UploadValidator {
 
   private boolean isMp4OrMov(byte[] header, int length) {
     return length >= 8 && isPrefix(header, length, "ftyp", 4);
+  }
+
+  private boolean isAvi(byte[] header, int length) {
+    return length >= 12 && isPrefix(header, length, "RIFF") && isPrefix(header, length, "AVI ", 8);
   }
 
   private boolean isWave(byte[] header, int length) {

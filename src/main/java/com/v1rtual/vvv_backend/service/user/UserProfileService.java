@@ -51,8 +51,9 @@ public class UserProfileService {
   }
 
   public Result<String> updateUsername(Map<String, String> body, User currentUser) {
-    String newUsername = body.get("username");
-    if (newUsername == null || newUsername.trim().isEmpty()) return Result.error("用户名不能为空哦～");
+    String requestedUsername = body.get("username");
+    String newUsername = requestedUsername == null ? null : requestedUsername.trim();
+    if (newUsername == null || newUsername.isEmpty()) return Result.error("用户名不能为空哦～");
     if (currentUser == null) return Result.error("请先登录哦～");
     if (userService.findByUsername(newUsername) != null) return Result.error("这个名字已经被别人占有了哦～再想一个？");
 

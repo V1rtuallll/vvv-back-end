@@ -22,6 +22,7 @@ import com.v1rtual.vvv_backend.mapper.MusicMapper;
 import com.v1rtual.vvv_backend.mapper.PhotoMapper;
 import com.v1rtual.vvv_backend.mapper.VideoMapper;
 import com.v1rtual.vvv_backend.service.media.UploadValidator;
+import com.v1rtual.vvv_backend.service.media.MediaTypeDirectory;
 import com.v1rtual.vvv_backend.util.OssUtil;
 import com.v1rtual.vvv_backend.vo.Result;
 
@@ -74,7 +75,7 @@ public class GalleryUploadService {
 
         String url;
         try {
-          url = ossUtil.upload(file, typeToDirectory(type));
+          url = ossUtil.upload(file, MediaTypeDirectory.directoryFor(type));
         } catch (IOException e) {
           log.error("上传文件失败: {}", file.getOriginalFilename(), e);
           continue;
@@ -107,15 +108,6 @@ public class GalleryUploadService {
       uploadedUrls.forEach(this::cleanupUploadedFile);
       throw e;
     }
-  }
-
-  private OssUtil.FileType typeToDirectory(ResourceType type) {
-    return switch (type) {
-      case photo -> OssUtil.FileType.IMGS;
-      case gif -> OssUtil.FileType.GIF;
-      case video -> OssUtil.FileType.VIDEO;
-      case music -> OssUtil.FileType.MUSIC;
-    };
   }
 
   private int insertTypedMedia(ResourceType type, String title, String description, String url, User user) {

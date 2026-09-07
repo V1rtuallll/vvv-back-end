@@ -21,6 +21,7 @@ import com.v1rtual.vvv_backend.mapper.MusicMapper;
 import com.v1rtual.vvv_backend.mapper.PhotoMapper;
 import com.v1rtual.vvv_backend.mapper.VideoMapper;
 import com.v1rtual.vvv_backend.service.media.UploadValidator;
+import com.v1rtual.vvv_backend.service.media.MediaTypeDirectory;
 import com.v1rtual.vvv_backend.util.OssUtil;
 import com.v1rtual.vvv_backend.vo.Result;
 
@@ -51,7 +52,7 @@ public class AdminMediaService {
     } catch (IllegalArgumentException e) {
       return Result.error(e.getMessage());
     }
-    OssUtil.FileType targetDir = toOssFileType(mediaType);
+    OssUtil.FileType targetDir = MediaTypeDirectory.directoryFor(mediaType);
 
     Long uploaderId = currentUser != null ? currentUser.getId() : 0L;
     String uploaderName = currentUser != null ? currentUser.getUsername() : "V1rtual";
@@ -140,15 +141,6 @@ public class AdminMediaService {
       log.error("更新资源失败", e);
       return Result.error("保存失败了QAQ…月光抖了一下");
     }
-  }
-
-  private OssUtil.FileType toOssFileType(ResourceType type) {
-    return switch (type) {
-      case photo -> OssUtil.FileType.IMGS;
-      case gif -> OssUtil.FileType.GIF;
-      case video -> OssUtil.FileType.VIDEO;
-      case music -> OssUtil.FileType.MUSIC;
-    };
   }
 
   private int insertMedia(OssUtil.FileType type, String title, String url, Long uploaderId, String uploaderName) {

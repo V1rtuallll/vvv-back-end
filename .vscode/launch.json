@@ -1,0 +1,45 @@
+{
+  // 仅用于本地开发。生产发布走 GitHub Actions 的 Deploy backend，
+  // 不要在这里配置任何指向生产的主机、端口或凭据。
+  //
+  // 两个配置都显式做了三件事，防止误连生产：
+  //   1. 不读 .env —— 那个文件可能装着生产凭据，而且当前并不存在
+  //   2. SPRING_PROFILES_ACTIVE=local —— 覆盖掉环境里可能残留的 prod
+  //   3. SPRING_CONFIG_ADDITIONAL_LOCATION 置空 —— 生产配置靠它注入
+  //      （服务器上是 /etc/v1rtual/application-prod.yml），本地必须为空
+  //
+  // 本地连接信息来自 src/main/resources/application.yml：localhost:3306/vvv
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "java",
+      "name": "后端 · 本地（8848）",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "mainClass": "com.v1rtual.vvv_backend.VvvBackendApplication",
+      "projectName": "vvv_backend",
+      "console": "integratedTerminal",
+      "env": {
+        "SPRING_PROFILES_ACTIVE": "local",
+        "SPRING_CONFIG_ADDITIONAL_LOCATION": ""
+      }
+    },
+    {
+      // 8848 被别的进程占用时用这个（本机就出现过容器占着 8848）。
+      // 前端 dev server 的 /api 代理默认指向 8848，要联调就把 vite.config.js
+      // 里的 VITE_API_PROXY_TARGET 指到 8849。
+      "type": "java",
+      "name": "后端 · 本地（8849，避开端口占用）",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "mainClass": "com.v1rtual.vvv_backend.VvvBackendApplication",
+      "projectName": "vvv_backend",
+      "console": "integratedTerminal",
+      "args": "--server.port=8849",
+      "env": {
+        "SPRING_PROFILES_ACTIVE": "local",
+        "SPRING_CONFIG_ADDITIONAL_LOCATION": ""
+      }
+    }
+  ]
+}

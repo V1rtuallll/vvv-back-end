@@ -61,8 +61,8 @@ public class OssUtil {
   }
 
   /**
-   * 上传文件～温柔流式直传，根据类型自动选择专属目录
-   * 
+   * 上传文件，按类型写入对应目录
+   *
    * @param file     前端的文件
    * @param fileType 文件类型（自动分配目录）
    * @return 公开访问URL
@@ -70,7 +70,7 @@ public class OssUtil {
   public String upload(MultipartFile file, FileType fileType) throws IOException {
     String originalFilename = file.getOriginalFilename();
     if (originalFilename == null || originalFilename.isEmpty()) {
-      throw new IllegalArgumentException("文件名不能为空哦～");
+      throw new IllegalArgumentException("文件名不能为空");
     }
 
     // 提取后缀，生成唯一文件名
@@ -87,7 +87,7 @@ public class OssUtil {
       ossClient.putObject(bucketName, fileName, inputStream, metadata);
     }
 
-    log.info("{}已安全抵达{}～路径：{}", suffix, fileType.name(), fileName);
+    log.info("上传完成：后缀 {}，目录 {}，路径 {}，大小 {}", suffix, fileType.name(), fileName, file.getSize());
     return getPublicUrl(fileName);
   }
 
@@ -99,8 +99,8 @@ public class OssUtil {
   }
 
   /**
-   * 生成签名临时URL～更私密的安全通道
-   * 
+   * 生成签名临时URL
+   *
    * @param fileName      文件完整路径
    * @param expireSeconds 过期秒数（如3600=1小时）
    */
@@ -113,21 +113,29 @@ public class OssUtil {
   }
 
   /**
-   * 删除文件～温柔告别
+   * 删除文件
    */
   public void delete(String fileName) {
     ossClient.deleteObject(bucketName, fileName);
-    log.info("文件已轻轻离去～路径：{}", fileName);
+    log.info("文件已删除：{}", fileName);
   }
 
   public void deleteByPublicUrl(String publicUrl) {
-    String path = URI.create(publicUrl).getPath();
-    if (path == null || path.length() <= 1) throw new IllegalArgumentException("OSS 文件地址无效");
-    delete(path.substring(1));
+    delete(objectKeyOf(publicUrl));
   }
 
   /**
-   * 检查文件是否存在～像轻轻叩门
+   * 从公开 URL 解析出对象键（bucket 内的路径）。
+   * URL 不合法时抛 IllegalArgumentException。
+   */
+  public String objectKeyOf(String publicUrl) {
+    String path = URI.create(publicUrl).getPath();
+    if (path == null || path.length() <= 1) throw new IllegalArgumentException("OSS 文件地址无效");
+    return path.substring(1);
+  }
+
+  /**
+   * 检查文件是否存在
    */
   public boolean exists(String fileName) {
     return ossClient.doesObjectExist(bucketName, fileName);

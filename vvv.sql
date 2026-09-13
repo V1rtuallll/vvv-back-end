@@ -2091,3 +2091,22 @@ UNLOCK TABLES;
 ;
 
 -- Dump completed on 2025-12-26 20:03:34
+--
+-- OSS 对象清理失败的可重试记录
+-- 数据库里的行已删除、但 OSS 对象没能删掉时写入，保留 object_key 供后续重试删除。
+-- 无外键：它记录的对象可能已经不在任何业务表里。
+--
+
+DROP TABLE IF EXISTS `oss_cleanup_record`;
+CREATE TABLE `oss_cleanup_record` (
+    `id` bigint NOT NULL AUTO_INCREMENT,
+    `object_key` varchar(512) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'OSS 对象键（bucket 内路径），重试删除的入参',
+    `public_url` varchar(1024) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '原始公开 URL，便于排查',
+    `reason` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '触发清理的场景，例如 gallery_delete',
+    `status` varchar(20) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending' COMMENT 'pending=待重试',
+    `retry_count` int NOT NULL DEFAULT '0' COMMENT '已重试次数',
+    `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_status` (`status`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = 'OSS 对象清理失败的可重试记录';

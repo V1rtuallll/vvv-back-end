@@ -3,7 +3,9 @@ package com.v1rtual.vvv_backend.controller;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -16,6 +18,7 @@ import com.v1rtual.vvv_backend.entity.Comment;
 import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.security.CurrentUserProvider;
 import com.v1rtual.vvv_backend.service.gallery.GalleryInteractionService;
+import com.v1rtual.vvv_backend.service.gallery.GalleryManageService;
 import com.v1rtual.vvv_backend.service.gallery.GalleryQueryService;
 import com.v1rtual.vvv_backend.service.gallery.GalleryUploadService;
 import com.v1rtual.vvv_backend.vo.Result;
@@ -31,6 +34,7 @@ public class GalleryController {
   private final GalleryUploadService uploadService;
   private final GalleryQueryService queryService;
   private final GalleryInteractionService interactionService;
+  private final GalleryManageService manageService;
 
   @PostMapping("/upload")
   public Result<Void> upload(MultipartFile[] files,
@@ -70,6 +74,24 @@ public class GalleryController {
   @GetMapping("/isLiked/{id}")
   public Result<Boolean> isGalleryLiked(@PathVariable Long id) {
     return queryService.isLiked(id, currentUser());
+  }
+
+  /** 只接受 title / description / alt / tags / category，其余字段由服务端忽略 */
+  @PatchMapping("/{id}")
+  public Result<Map<String, Object>> updateGallery(
+      @PathVariable Long id,
+      @RequestBody Map<String, Object> body) {
+    return manageService.updateMetadata(id, body, currentUser());
+  }
+
+  @DeleteMapping("/{id}")
+  public Result<Void> deleteGallery(@PathVariable Long id) {
+    return manageService.deleteGallery(id, currentUser());
+  }
+
+  @DeleteMapping("/comments/{id}")
+  public Result<Void> deleteComment(@PathVariable Long id) {
+    return manageService.deleteComment(id, currentUser());
   }
 
   private User currentUser() {

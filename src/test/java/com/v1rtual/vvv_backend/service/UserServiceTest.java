@@ -99,7 +99,7 @@ class UserServiceTest {
   }
 
   @Test
-  void registerRejectsPasswordsThatAreNotFourCharacters() {
+  void registerRejectsEmptyPasswords() {
     UserMapper userMapper = mock(UserMapper.class);
     UserService service = newService(userMapper);
 
@@ -108,12 +108,32 @@ class UserServiceTest {
       assertEquals(HttpStatus.BAD_REQUEST, failure.getStatusCode(), "应拒绝密码：" + password);
       assertEquals("密码不能为空", failure.getReason());
     }
-    for (String password : new String[] { "123", "12345" }) {
+    verify(userMapper, never()).insert(any());
+  }
+
+  @Test
+  void registerRejectsPasswordsShorterThanFourCharacters() {
+    UserMapper userMapper = mock(UserMapper.class);
+    UserService service = newService(userMapper);
+
+    for (String password : new String[] { "1", "12", "123" }) {
       ResponseStatusException failure = registerAndExpectFailure(service, newDto("moon", password, password));
       assertEquals(HttpStatus.BAD_REQUEST, failure.getStatusCode(), "应拒绝密码：" + password);
-      assertEquals("密码必须为 4 位", failure.getReason());
+      assertEquals("密码至少 4 位", failure.getReason());
     }
     verify(userMapper, never()).insert(any());
+  }
+
+  /** 密码规则是「至少 4 位」，更长的密码必须能注册，否则等于给用户设了个隐形的长度上限 */
+  @Test
+  void registerAcceptsPasswordsLongerThanTheMinimum() {
+    UserMapper userMapper = mock(UserMapper.class);
+    UserService service = newService(userMapper);
+
+    User registered = service.register(newDto("moon", "a-much-longer-password", "a-much-longer-password"));
+
+    assertNotNull(registered);
+    verify(userMapper).insert(any());
   }
 
   @Test

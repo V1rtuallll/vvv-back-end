@@ -23,7 +23,7 @@ public class UserService {
   private static final Pattern USERNAME_PATTERN = Pattern.compile("[\\p{IsHan}A-Za-z0-9_.-]+");
   private static final int USERNAME_MIN_LENGTH = 2;
   private static final int USERNAME_MAX_LENGTH = 20;
-  private static final int PASSWORD_LENGTH = 4;
+  private static final int PASSWORD_MIN_LENGTH = 4;
 
   private final UserMapper userMapper;
   private final PasswordEncoder passwordEncoder;
@@ -74,8 +74,8 @@ public class UserService {
     if (password == null || password.isBlank()) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "密码不能为空");
     }
-    if (password.length() != PASSWORD_LENGTH) {
-      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "密码必须为 " + PASSWORD_LENGTH + " 位");
+    if (password.length() < PASSWORD_MIN_LENGTH) {
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "密码至少 " + PASSWORD_MIN_LENGTH + " 位");
     }
     if (!password.equals(confirmPassword)) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "两次输入的密码不一致");

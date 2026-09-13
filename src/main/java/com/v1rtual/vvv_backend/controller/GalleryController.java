@@ -56,6 +56,17 @@ public class GalleryController {
     return uploadService.uploadOne(file, title, description, clientUploadId, currentUser());
   }
 
+  /**
+   * 用新文件替换已有资源的文件。新文件的类型必须与当前资源一致，
+   * 换类型请删除后重新上传。旧的 OSS 对象在数据库更新成功后清理。
+   */
+  @PostMapping("/{id}/replace")
+  public Result<UploadResultVO> replaceFile(
+      @PathVariable Long id,
+      @RequestParam("file") MultipartFile file) {
+    return uploadService.replaceFile(id, file, currentUser());
+  }
+
   /** 前端据此提示大小上限，值与后端校验读的是同一份配置 */
   @GetMapping("/upload-limit")
   public Result<UploadLimitVO> uploadLimit() {
@@ -111,6 +122,15 @@ public class GalleryController {
   @DeleteMapping("/comments/{id}")
   public Result<Void> deleteComment(@PathVariable Long id) {
     return manageService.deleteComment(id, currentUser());
+  }
+
+  /**
+   * 撤销一次上传：前端在上传中途取消时调用，按客户端上传 ID 删掉
+   * 这次上传产生的数据库行与 OSS 对象。幂等，重复调用返回成功。
+   */
+  @DeleteMapping("/upload/{clientUploadId}")
+  public Result<Void> cancelUpload(@PathVariable String clientUploadId) {
+    return manageService.cancelUpload(clientUploadId, currentUser());
   }
 
   private User currentUser() {

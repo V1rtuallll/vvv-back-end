@@ -103,6 +103,32 @@ public class GalleryManageService {
     return Result.success("删除成功");
   }
 
+  /**
+   * 撤销一次上传：按客户端上传 ID 找到这次上传建出来的资源，连同 OSS 对象一起删掉。
+   *
+   * 前端在上传中途取消时调用。必须幂等：取消可能赶在入库之前发生，
+   * 也可能赶在入库之后，两种都要能正确处理；重复调用同样返回成功。
+   */
+  public Result<Void> cancelUpload(String clientUploadId, User currentUser) {
+    if (currentUser == null) return Result.error(401, "未登录或登录已过期");
+    if (StringUtils.isBlank(clientUploadId)) return Result.error(400, "缺少客户端上传ID");
+
+    Gallery gallery = galleryMapper.selectByClientUploadId(clientUploadId.trim());
+    // 还没入库就取消：没有东西需要清理，这是正常路径而不是错误
+    if (gallery == null) return Result.success("这次上传没有产生资源");
+
+    if (!canManage(gallery.getUserId(), currentUser)) {
+      return Result.error(403, OwnerAccess.DENIED_MESSAGE);
+    }
+    // 并发下另一个请求已经删掉了，同样视为成功
+    if (deletionService.deleteGallery(gallery) == 0) return Result.success("这次上传没有产生资源");
+
+    if (!deleteOssObject(gallery.getSrc())) {
+      return Result.error(500, "资源已删除，但 OSS 对象清理失败，已记录待重试");
+    }
+    return Result.success("已取消这次上传");
+  }
+
   /** 作者本人或管理员。管理员判定复用 OwnerAccess，与后台入口保持同一个口径。 */
   private boolean canManage(Long ownerId, User currentUser) {
     if (currentUser == null) return false;

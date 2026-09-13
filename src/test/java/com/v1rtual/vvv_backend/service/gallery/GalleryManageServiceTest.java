@@ -230,4 +230,85 @@ class GalleryManageServiceTest {
     assertNull(result.getData());
     verify(deletionService, never()).deleteComment(any());
   }
+  // ===== 撤销上传（前端中途取消时调用）=====
+
+  private static final String CLIENT_ID = "client-upload-1";
+
+  @Test
+  void cancelUploadRejectsAnonymousCallers() {
+    assertEquals(401, service().cancelUpload(CLIENT_ID, null).getCode());
+    verify(deletionService, never()).deleteGallery(any());
+  }
+
+  @Test
+  void cancelUploadRequiresAClientUploadId() {
+    assertEquals(400, service().cancelUpload("  ", user(1L, "谁")).getCode());
+    verify(deletionService, never()).deleteGallery(any());
+  }
+
+  /** 取消可能赶在入库之前发生，那是正常路径，不是错误 */
+  @Test
+  void cancelUploadSucceedsWhenNothingWasPersisted() {
+    when(galleryMapper.selectByClientUploadId(CLIENT_ID)).thenReturn(null);
+
+    Result<Void> result = service().cancelUpload(CLIENT_ID, user(1L, "谁"));
+
+    assertEquals(200, result.getCode());
+    verify(deletionService, never()).deleteGallery(any());
+    verify(ossUtil, never()).deleteByPublicUrl(anyString());
+  }
+
+  @Test
+  void cancelUploadRemovesBothTheRowAndTheOssObject() {
+    Gallery stored = gallery(7L, 100L);
+    when(galleryMapper.selectByClientUploadId(CLIENT_ID)).thenReturn(stored);
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    when(deletionService.deleteGallery(stored)).thenReturn(1);
+
+    Result<Void> result = service().cancelUpload(CLIENT_ID, user(100L, "作者"));
+
+    assertEquals(200, result.getCode());
+    verify(deletionService).deleteGallery(stored);
+    verify(ossUtil).deleteByPublicUrl(SRC);
+    verify(cleanupRecordService, never()).recordFailure(anyString(), anyString());
+  }
+
+  @Test
+  void cancelUploadRejectsOutsiders() {
+    when(galleryMapper.selectByClientUploadId(CLIENT_ID)).thenReturn(gallery(7L, 100L));
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+
+    Result<Void> result = service().cancelUpload(CLIENT_ID, user(200L, "路人"));
+
+    assertEquals(403, result.getCode());
+    verify(deletionService, never()).deleteGallery(any());
+  }
+
+  /** 并发下另一个请求已经删过了，这次取消同样算成功 */
+  @Test
+  void cancelUploadIsIdempotentWhenTheRowIsAlreadyGone() {
+    Gallery stored = gallery(7L, 100L);
+    when(galleryMapper.selectByClientUploadId(CLIENT_ID)).thenReturn(stored);
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    when(deletionService.deleteGallery(stored)).thenReturn(0);
+
+    Result<Void> result = service().cancelUpload(CLIENT_ID, user(100L, "作者"));
+
+    assertEquals(200, result.getCode());
+    verify(ossUtil, never()).deleteByPublicUrl(anyString());
+  }
+
+  @Test
+  void cancelUploadReportsWhenTheOssObjectCannotBeRemoved() {
+    Gallery stored = gallery(7L, 100L);
+    when(galleryMapper.selectByClientUploadId(CLIENT_ID)).thenReturn(stored);
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    when(deletionService.deleteGallery(stored)).thenReturn(1);
+    doThrow(new RuntimeException("oss down")).when(ossUtil).deleteByPublicUrl(SRC);
+
+    Result<Void> result = service().cancelUpload(CLIENT_ID, user(100L, "作者"));
+
+    assertEquals(500, result.getCode());
+    verify(cleanupRecordService).recordFailure(contains("a.png"), anyString());
+  }
 }

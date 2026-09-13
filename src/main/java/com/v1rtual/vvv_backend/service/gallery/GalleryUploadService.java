@@ -25,6 +25,7 @@ import com.v1rtual.vvv_backend.mapper.GifMapper;
 import com.v1rtual.vvv_backend.mapper.MusicMapper;
 import com.v1rtual.vvv_backend.mapper.PhotoMapper;
 import com.v1rtual.vvv_backend.mapper.VideoMapper;
+import com.v1rtual.vvv_backend.security.OwnerAccess;
 import com.v1rtual.vvv_backend.service.media.MediaTypeDirectory;
 import com.v1rtual.vvv_backend.service.media.OssCleanupRecordService;
 import com.v1rtual.vvv_backend.service.media.UploadValidator;
@@ -61,6 +62,7 @@ public class GalleryUploadService {
   private final UploadValidator uploadValidator;
   private final OssCleanupRecordService ossCleanupRecordService;
   private final MultipartProperties multipartProperties;
+  private final OwnerAccess ownerAccess;
 
   /**
    * @param clientUploadId 客户端为该文件生成的 ID，用于超时重试的服务端幂等；必传
@@ -130,6 +132,93 @@ public class GalleryUploadService {
       log.error("上传入库失败：{}", file.getOriginalFilename(), e);
       markRollback();
       return Result.error(500, "资源入库失败");
+    }
+  }
+
+  /**
+   * 用新文件替换已有资源的文件。
+   *
+   * 顺序很关键：**先传新文件 → 再在一个事务里把 gallery 与类型表的 src 一起改掉 → 最后才删旧对象**。
+   * 反过来（先删旧再更新）一旦数据库写失败，旧对象已经没了而 src 还指着它，资源直接变成坏链。
+   *
+   * src 是 gallery 表与类型表之间的关联键，两边必须同时改，否则又会双表不同步。
+   *
+   * 新文件的类型必须与当前资源一致：换类型等于换了一种资源，
+   * 类型表要删一行再插一行、计数也会丢，那种情况应该删除后重新上传。
+   */
+  @Transactional
+  public Result<UploadResultVO> replaceFile(Long id, MultipartFile file, User user) {
+    if (user == null) return Result.error(401, "未登录或登录已过期");
+    if (id == null || id <= 0) return Result.error(400, "资源ID无效");
+    if (file == null || file.isEmpty()) return Result.error(400, "文件不能为空");
+
+    Gallery gallery = galleryMapper.selectById(id);
+    if (gallery == null) return Result.error(404, "资源不存在");
+    if (!canManage(gallery.getUserId(), user)) return Result.error(403, OwnerAccess.DENIED_MESSAGE);
+
+    ResourceType type;
+    try {
+      type = uploadValidator.validateAndResolveMedia(file);
+    } catch (IllegalArgumentException e) {
+      return Result.error(400, e.getMessage());
+    }
+    if (gallery.getType() != type) {
+      return Result.error(400, "新文件的类型与当前资源不一致（当前是 " + gallery.getType()
+          + "），换类型请删除后重新上传");
+    }
+
+    String oldSrc = gallery.getSrc();
+    String newUrl = null;
+    try {
+      newUrl = ossUtil.upload(file, MediaTypeDirectory.directoryFor(type));
+      if (StringUtils.isBlank(newUrl)) throw new IllegalStateException("OSS 未返回可访问地址");
+
+      if (galleryMapper.updateSrc(id, newUrl) != 1) throw new IllegalStateException("Gallery 资源更新失败");
+      if (updateTypedSrc(type, oldSrc, newUrl) != 1) throw new IllegalStateException("媒体资源更新失败");
+
+      // 数据库已经指向新文件，旧对象成了垃圾。删不掉只记待重试，不影响这次替换的结果。
+      discardOldObject(oldSrc);
+
+      gallery.setSrc(newUrl);
+      return Result.success(toResource(gallery, "success"), "文件已替换");
+    } catch (IOException e) {
+      log.error("替换资源文件时上传 OSS 失败：{}", file.getOriginalFilename(), e);
+      return Result.error(500, "上传文件失败");
+    } catch (RuntimeException e) {
+      if (newUrl != null) cleanupOssObject(newUrl);
+      log.error("替换资源文件失败：{}", file.getOriginalFilename(), e);
+      markRollback();
+      return Result.error(500, "文件替换失败");
+    }
+  }
+
+  private boolean canManage(Long ownerId, User currentUser) {
+    if (currentUser == null) return false;
+    if (ownerAccess.isOwner(currentUser)) return true;
+    return ownerId != null && ownerId.equals(currentUser.getId());
+  }
+
+  private int updateTypedSrc(ResourceType type, String oldSrc, String newSrc) {
+    if (type == null || StringUtils.isBlank(oldSrc)) return 0;
+    return switch (type) {
+      case photo -> photoMapper.updateSrcBySrc(oldSrc, newSrc);
+      case gif -> gifMapper.updateSrcBySrc(oldSrc, newSrc);
+      case video -> videoMapper.updateSrcBySrc(oldSrc, newSrc);
+      case music -> musicMapper.updateSrcBySrc(oldSrc, newSrc);
+    };
+  }
+
+  /**
+   * 替换成功后丢弃旧对象。这里**不**让调用方失败：用户的资源已经是好的了，
+   * 旧对象只是垃圾。删不掉就写进可重试记录，别把一次成功的替换报成失败。
+   */
+  private void discardOldObject(String oldSrc) {
+    if (StringUtils.isBlank(oldSrc)) return;
+    try {
+      ossUtil.deleteByPublicUrl(oldSrc);
+    } catch (RuntimeException e) {
+      log.error("替换文件后清理旧对象失败：{}", oldSrc, e);
+      ossCleanupRecordService.recordFailure(oldSrc, OSS_CLEANUP_REASON);
     }
   }
 

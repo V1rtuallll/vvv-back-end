@@ -3,6 +3,7 @@ package com.v1rtual.vvv_backend.service.gallery;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -15,12 +16,14 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.mock.web.MockMultipartFile;
 
 import com.v1rtual.vvv_backend.entity.Gallery;
+import com.v1rtual.vvv_backend.entity.ResourceType;
 import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.mapper.GalleryMapper;
 import com.v1rtual.vvv_backend.mapper.GifMapper;
 import com.v1rtual.vvv_backend.mapper.MusicMapper;
 import com.v1rtual.vvv_backend.mapper.PhotoMapper;
 import com.v1rtual.vvv_backend.mapper.VideoMapper;
+import com.v1rtual.vvv_backend.security.OwnerAccess;
 import com.v1rtual.vvv_backend.service.media.OssCleanupRecordService;
 import com.v1rtual.vvv_backend.service.media.UploadValidator;
 import com.v1rtual.vvv_backend.util.OssUtil;
@@ -38,11 +41,13 @@ class GalleryUploadServiceTest {
   private final PhotoMapper photoMapper = mock(PhotoMapper.class);
   private final OssCleanupRecordService cleanupRecordService = mock(OssCleanupRecordService.class);
   private final MultipartProperties multipartProperties = new MultipartProperties();
+  private final OwnerAccess ownerAccess = mock(OwnerAccess.class);
 
   private GalleryUploadService service() {
     return new GalleryUploadService(ossUtil, galleryMapper, photoMapper, mock(GifMapper.class),
         mock(VideoMapper.class), mock(MusicMapper.class),
-        new UploadValidator(multipartProperties), cleanupRecordService, multipartProperties);
+        new UploadValidator(multipartProperties), cleanupRecordService, multipartProperties,
+        ownerAccess);
   }
 
   private static MockMultipartFile png() {
@@ -51,9 +56,13 @@ class GalleryUploadServiceTest {
   }
 
   private static User member() {
+    return user(1L, "member");
+  }
+
+  private static User user(Long id, String name) {
     User user = new User();
-    user.setId(1L);
-    user.setUsername("member");
+    user.setId(id);
+    user.setUsername(name);
     return user;
   }
 
@@ -180,5 +189,108 @@ class GalleryUploadServiceTest {
 
     assertEquals(5L * 1024 * 1024, result.getData().getMaxFileSizeBytes());
     assertEquals(20L * 1024 * 1024, result.getData().getMaxRequestSizeBytes());
+  }
+  // ===== 替换资源文件 =====
+
+  private static Gallery existingPhoto() {
+    return Gallery.builder().id(7L).type(ResourceType.photo).title("旧标题")
+        .src("https://example.test/imgs/old.png").userId(1L).build();
+  }
+
+  @Test
+  void replaceUploadsTheNewFileAndUpdatesBothTablesSoTheyStayInSync() throws Exception {
+    Gallery stored = existingPhoto();
+    when(galleryMapper.selectById(7L)).thenReturn(stored);
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    when(ossUtil.upload(any(), any())).thenReturn("https://example.test/imgs/new.png");
+    when(galleryMapper.updateSrc(7L, "https://example.test/imgs/new.png")).thenReturn(1);
+    when(photoMapper.updateSrcBySrc("https://example.test/imgs/old.png",
+        "https://example.test/imgs/new.png")).thenReturn(1);
+
+    Result<UploadResultVO> result = service().replaceFile(7L, png(), member());
+
+    assertEquals(200, result.getCode());
+    assertEquals("https://example.test/imgs/new.png", result.getData().getUrl());
+    // src 是两张表的关联键，必须一起改
+    verify(galleryMapper).updateSrc(7L, "https://example.test/imgs/new.png");
+    verify(photoMapper).updateSrcBySrc("https://example.test/imgs/old.png",
+        "https://example.test/imgs/new.png");
+    // 数据库已经指向新文件之后，才轮到删旧对象
+    verify(ossUtil).deleteByPublicUrl("https://example.test/imgs/old.png");
+  }
+
+  @Test
+  void replaceRejectsAFileOfADifferentType() throws Exception {
+    Gallery stored = Gallery.builder().id(7L).type(ResourceType.video).src("https://example.test/v/old.mp4")
+        .userId(1L).build();
+    when(galleryMapper.selectById(7L)).thenReturn(stored);
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+
+    Result<UploadResultVO> result = service().replaceFile(7L, png(), member());
+
+    assertEquals(400, result.getCode());
+    verify(ossUtil, never()).upload(any(), any());
+    verify(galleryMapper, never()).updateSrc(any(), anyString());
+  }
+
+  @Test
+  void replaceRejectsOutsiders() throws Exception {
+    when(galleryMapper.selectById(7L)).thenReturn(existingPhoto());
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+
+    Result<UploadResultVO> result = service().replaceFile(7L, png(), user(200L, "路人"));
+
+    assertEquals(403, result.getCode());
+    verify(ossUtil, never()).upload(any(), any());
+  }
+
+  @Test
+  void replaceRejectsAnonymousCallers() throws Exception {
+    Result<UploadResultVO> result = service().replaceFile(7L, png(), null);
+
+    assertEquals(401, result.getCode());
+    verify(ossUtil, never()).upload(any(), any());
+  }
+
+  @Test
+  void replaceReportsMissingResources() throws Exception {
+    when(galleryMapper.selectById(404L)).thenReturn(null);
+
+    assertEquals(404, service().replaceFile(404L, png(), member()).getCode());
+  }
+
+  /** 数据库没更新成功时，新传上去的对象必须清掉，否则每次失败都留一份垃圾 */
+  @Test
+  void replaceCleansUpTheNewObjectWhenTheDatabaseUpdateFails() throws Exception {
+    when(galleryMapper.selectById(7L)).thenReturn(existingPhoto());
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    when(ossUtil.upload(any(), any())).thenReturn("https://example.test/imgs/new.png");
+    when(galleryMapper.updateSrc(7L, "https://example.test/imgs/new.png")).thenReturn(0);
+
+    Result<UploadResultVO> result = service().replaceFile(7L, png(), member());
+
+    assertEquals(500, result.getCode());
+    verify(ossUtil).deleteByPublicUrl("https://example.test/imgs/new.png");
+    // 旧对象一个字都没动
+    verify(ossUtil, never()).deleteByPublicUrl("https://example.test/imgs/old.png");
+  }
+
+  /**
+   * 旧对象删不掉只是留了垃圾，用户的资源本身是好的 —— 不能把一次成功的替换报成失败。
+   */
+  @Test
+  void replaceStillSucceedsWhenTheOldObjectCannotBeDeleted() throws Exception {
+    when(galleryMapper.selectById(7L)).thenReturn(existingPhoto());
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    when(ossUtil.upload(any(), any())).thenReturn("https://example.test/imgs/new.png");
+    when(galleryMapper.updateSrc(7L, "https://example.test/imgs/new.png")).thenReturn(1);
+    when(photoMapper.updateSrcBySrc(anyString(), anyString())).thenReturn(1);
+    doThrow(new RuntimeException("oss down")).when(ossUtil)
+        .deleteByPublicUrl("https://example.test/imgs/old.png");
+
+    Result<UploadResultVO> result = service().replaceFile(7L, png(), member());
+
+    assertEquals(200, result.getCode());
+    verify(cleanupRecordService).recordFailure(contains("old.png"), anyString());
   }
 }

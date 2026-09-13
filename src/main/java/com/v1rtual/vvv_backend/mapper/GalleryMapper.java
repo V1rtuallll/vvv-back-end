@@ -72,6 +72,13 @@ public interface GalleryMapper {
   @Delete("DELETE FROM gallery WHERE id = #{id}")
   int deleteById(Long id);
 
+  /**
+   * 只改 src。src 是 gallery 与类型表之间的关联键，替换文件时必须两张表一起改，
+   * 所以单独开一个方法，而不是走 updateMetadata 的元数据白名单。
+   */
+  @Update("UPDATE gallery SET src = #{src}, updated_at = NOW() WHERE id = #{id}")
+  int updateSrc(@Param("id") Long id, @Param("src") String src);
+
   // 点赞 +1
   @Update("UPDATE gallery SET likes = likes + 1 WHERE id = #{id}")
   int incrementLikes(Long id);

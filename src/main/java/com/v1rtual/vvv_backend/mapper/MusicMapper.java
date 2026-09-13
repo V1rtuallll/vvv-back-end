@@ -90,4 +90,8 @@ public interface MusicMapper {
             "created_at, updated_at, uploader_id, uploader_username " +
             "FROM music WHERE id = #{id}")
     Music selectById(Long id);
+
+    /** 替换文件时同步类型表的 src —— 它必须跟 gallery 表的 src 保持一致 */
+    @Update("UPDATE music SET src = #{newSrc}, updated_at = NOW() WHERE src = #{oldSrc}")
+    int updateSrcBySrc(@Param("oldSrc") String oldSrc, @Param("newSrc") String newSrc);
 }

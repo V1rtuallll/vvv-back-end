@@ -246,6 +246,7 @@ CREATE TABLE `gallery` (
     `artist` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '歌手/创作者（music专用）',
     `album` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '专辑名（music专用）',
     `cover_image` varchar(512) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '专辑封面（music专用，可冗余src）',
+    `client_upload_id` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '客户端上传ID，用于上传重试的服务端幂等',
     `created_at` datetime DEFAULT CURRENT_TIMESTAMP COMMENT '上传时间',
     `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     PRIMARY KEY (`id`),
@@ -256,6 +257,7 @@ CREATE TABLE `gallery` (
     KEY `idx_tags` (`tags`),
     KEY `idx_likes` (`likes` DESC),
     KEY `idx_views` (`view_count` DESC),
+    UNIQUE KEY `uk_client_upload_id` (`client_upload_id`),
     CONSTRAINT `gallery_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `user` (`id`) ON DELETE CASCADE
 ) ENGINE = InnoDB AUTO_INCREMENT = 20 DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '统一资源表：图片、GIF、视频、音乐';
 /*!40101 SET character_set_client = @saved_cs_client */

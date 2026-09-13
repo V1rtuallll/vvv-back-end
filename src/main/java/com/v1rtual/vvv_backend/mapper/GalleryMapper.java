@@ -21,12 +21,19 @@ public interface GalleryMapper {
 
   @Insert("INSERT INTO gallery " +
       "(type, title, description, src, tags, alt, category, thumbnail, duration, " +
-      "artist, album, cover_image, user_id, uploader_username, created_at, updated_at) " +
+      "artist, album, cover_image, client_upload_id, user_id, uploader_username, created_at, updated_at) " +
       "VALUES " +
       "(#{type}, #{title}, #{description}, #{src}, #{tags}, #{alt}, #{category}, #{thumbnail}, #{duration}, " +
-      "#{artist}, #{album}, #{coverImage}, #{userId}, #{uploaderUsername}, NOW(), NOW())")
+      "#{artist}, #{album}, #{coverImage}, #{clientUploadId}, #{userId}, #{uploaderUsername}, NOW(), NOW())")
   @Options(useGeneratedKeys = true, keyProperty = "id")
   int insert(Gallery gallery);
+
+  /**
+   * 按客户端上传 ID 查行，用于上传重试的幂等判断。
+   * 该列有唯一索引，并发重试由索引兜底。
+   */
+  @Select("SELECT * FROM gallery WHERE client_upload_id = #{clientUploadId} LIMIT 1")
+  Gallery selectByClientUploadId(String clientUploadId);
 
   // 分页列表（支持type过滤）。offset 用 long，避免 (page - 1) * limit 在 int 下溢出
   @Select("<script>" +

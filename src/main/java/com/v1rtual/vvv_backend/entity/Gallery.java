@@ -37,6 +37,12 @@ public class Gallery {
   private Long userId;
   private String uploaderUsername;
 
+  /**
+   * 客户端为本次上传生成的 ID。上传超时重试时靠它做服务端幂等，
+   * 避免同一次上传因为重试而重复入库。gallery 表上有唯一索引兜底。
+   */
+  private String clientUploadId;
+
   private LocalDateTime createdAt;
   private LocalDateTime updatedAt;
 }

@@ -36,11 +36,25 @@ public class GalleryController {
   private final GalleryInteractionService interactionService;
   private final GalleryManageService manageService;
 
+  /**
+   * 上传单个文件。前端按文件并发发起请求，每个请求一个独立事务，
+   * 某个文件失败不会影响同批次的其他文件。
+   *
+   * @param clientUploadId 客户端生成的 ID，超时重试时靠它幂等，必传
+   */
   @PostMapping("/upload")
-  public Result<Void> upload(MultipartFile[] files,
-      @RequestParam(required = false) String[] titles,
-      @RequestParam(required = false) String[] descriptions) {
-    return uploadService.upload(files, titles, descriptions, currentUser());
+  public Result<Map<String, Object>> upload(
+      @RequestParam("file") MultipartFile file,
+      @RequestParam(required = false) String title,
+      @RequestParam(required = false) String description,
+      @RequestParam String clientUploadId) {
+    return uploadService.uploadOne(file, title, description, clientUploadId, currentUser());
+  }
+
+  /** 前端据此提示大小上限，值与后端校验读的是同一份配置 */
+  @GetMapping("/upload-limit")
+  public Result<Map<String, Object>> uploadLimit() {
+    return uploadService.uploadLimits();
   }
 
   @GetMapping("/list")

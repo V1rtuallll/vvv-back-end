@@ -291,6 +291,7 @@ VALUES (
         NULL,
         NULL,
         NULL,
+        NULL,
         '2025-12-26 19:59:47',
         '2025-12-26 19:59:51'
     ),
@@ -306,6 +307,7 @@ VALUES (
         0,
         0,
         'V1rtual',
+        NULL,
         NULL,
         NULL,
         NULL,
@@ -2112,3 +2114,19 @@ CREATE TABLE `oss_cleanup_record` (
     PRIMARY KEY (`id`),
     KEY `idx_status` (`status`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = 'OSS 对象清理失败的可重试记录';
+
+--
+-- 已执行的数据库迁移
+-- 由 scripts/migrations/ 下的版本化脚本维护，每个脚本执行后往这里写一行。
+--
+
+DROP TABLE IF EXISTS `schema_migrations`;
+CREATE TABLE `schema_migrations` (
+    `version` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '迁移编号，例如 V001',
+    `description` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '这次迁移做了什么',
+    `applied_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '执行时间',
+    `applied_by` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '执行者（数据库账号@主机）',
+    PRIMARY KEY (`version`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '已执行的数据库迁移';
+
+INSERT INTO `schema_migrations` VALUES ('V001','gallery.client_upload_id + oss_cleanup_record','2026-09-13 02:42:20','vvv@localhost');

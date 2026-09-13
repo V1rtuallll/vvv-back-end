@@ -1,6 +1,18 @@
-CREATE DATABASE IF NOT EXISTS `vvv` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+-- =============================================================================
+-- 完整数据库快照（结构 + 数据）
+-- =============================================================================
+-- 用法：
+--   mysql -h <host> -u <user> -p -e "CREATE DATABASE vvv CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+--   mysql -h <host> -u <user> -p vvv < vvv.sql
+--
+-- ⚠️ 本文件刻意不含 CREATE DATABASE / USE 语句。
+--    以前它们在这两行，导致 `mysql 某个库 < vvv.sql` 会被文件自己切到 vvv 库，
+--    把目标库整个覆盖掉。库请由调用方先建好。
+--
+-- 结构变更请走 db/migrations/ 下的版本化迁移，不要只改这里：
+-- 这里的快照供全新安装使用，已有环境靠 db/migrate.sh 收敛。
+-- =============================================================================
 
-USE `vvv`;
 -- MySQL dump 10.13  Distrib 8.0.40, for Win64 (x86_64)
 --
 -- Host: localhost    Database: vvv
@@ -2131,9 +2143,10 @@ DROP TABLE IF EXISTS `schema_migrations`;
 CREATE TABLE `schema_migrations` (
     `version` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '迁移编号，例如 V001',
     `description` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '这次迁移做了什么',
+    `checksum` char(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '迁移文件的 SHA-256，用于锁定已执行的内容',
     `applied_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '执行时间',
     `applied_by` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '执行者（数据库账号@主机）',
     PRIMARY KEY (`version`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '已执行的数据库迁移';
 
-INSERT INTO `schema_migrations` VALUES ('V001','gallery.client_upload_id + oss_cleanup_record','2026-09-13 02:42:20','vvv@localhost');
+INSERT INTO `schema_migrations` (version, description, checksum, applied_at, applied_by) VALUES ('V001','gallery.client_upload_id + oss_cleanup_record', NULL,'2026-09-13 02:42:20','vvv@localhost');

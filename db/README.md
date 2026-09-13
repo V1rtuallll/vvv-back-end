@@ -119,3 +119,4 @@ db/migrate.sh    # 补齐快照之后新增的迁移
 | 版本 | 内容 | 本机开发库 | 生产库 |
 | --- | --- | --- | --- |
 | V001 | `gallery.client_upload_id`（上传幂等）+ `oss_cleanup_record` 表 | 2026-09-13 | 2026-09-13 |
+| V002 | 回填类型表缺失的 `created_at` / `updated_at` | 2026-09-13 | 2026-09-13 |

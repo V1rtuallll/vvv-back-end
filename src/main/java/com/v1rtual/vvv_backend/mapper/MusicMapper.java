@@ -13,7 +13,7 @@ public interface MusicMapper {
             "is_pinned, view_count, created_at, updated_at, ",
             "uploader_id, uploader_username) ",
             "VALUES (#{title}, #{description}, #{src}, #{coverImage}, #{duration}, #{artist}, #{album}, #{tags}, ",
-            "#{isPinned}, #{viewCount}, #{createdAt}, #{updatedAt}, ",
+            "#{isPinned}, #{viewCount}, NOW(), NOW(), ",
             "#{uploaderId}, #{uploaderUsername})"
     })
     @Options(useGeneratedKeys = true, keyProperty = "id")
@@ -27,7 +27,7 @@ public interface MusicMapper {
             "<foreach collection='list' item='item' separator=','>",
             "(#{item.title}, #{item.description}, #{item.src}, #{item.coverImage}, #{item.duration}, ",
             "#{item.artist}, #{item.album}, #{item.tags}, #{item.isPinned}, #{item.viewCount}, ",
-            "#{item.createdAt}, #{item.updatedAt}, #{item.uploaderId}, #{item.uploaderUsername})",
+            "NOW(), NOW(), #{item.uploaderId}, #{item.uploaderUsername})",
             "</foreach>",
             "</script>"
     })

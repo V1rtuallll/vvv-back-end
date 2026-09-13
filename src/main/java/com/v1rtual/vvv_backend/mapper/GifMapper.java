@@ -14,7 +14,7 @@ public interface GifMapper {
             "is_pinned, view_count, created_at, updated_at, ",
             "uploader_id, uploader_username) ",
             "VALUES (#{title}, #{description}, #{src}, #{thumbnail}, #{tags}, ",
-            "#{isPinned}, #{viewCount}, #{createdAt}, #{updatedAt}, ",
+            "#{isPinned}, #{viewCount}, NOW(), NOW(), ",
             "#{uploaderId}, #{uploaderUsername})"
     })
     @Options(useGeneratedKeys = true, keyProperty = "id")
@@ -28,7 +28,7 @@ public interface GifMapper {
             "<foreach collection='list' item='item' separator=','>",
             "(#{item.title}, #{item.description}, #{item.src}, #{item.thumbnail}, ",
             "#{item.tags}, #{item.isPinned}, #{item.viewCount}, ",
-            "#{item.createdAt}, #{item.updatedAt}, #{item.uploaderId}, #{item.uploaderUsername})",
+            "NOW(), NOW(), #{item.uploaderId}, #{item.uploaderUsername})",
             "</foreach>",
             "</script>"
     })

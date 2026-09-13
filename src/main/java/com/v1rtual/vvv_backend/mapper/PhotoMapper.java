@@ -14,7 +14,7 @@ public interface PhotoMapper {
             "is_pinned, likes, view_count, created_at, updated_at, ",
             "uploader_id, uploader_username) ",
             "VALUES (#{title}, #{description}, #{src}, #{alt}, #{tags}, #{category}, ",
-            "#{isPinned}, #{likes}, #{viewCount}, #{createdAt}, #{updatedAt}, ",
+            "#{isPinned}, #{likes}, #{viewCount}, NOW(), NOW(), ",
             "#{uploaderId}, #{uploaderUsername})"
     })
     @Options(useGeneratedKeys = true, keyProperty = "id")
@@ -28,7 +28,7 @@ public interface PhotoMapper {
             "<foreach collection='list' item='item' separator=','>",
             "(#{item.title}, #{item.description}, #{item.src}, #{item.alt}, #{item.tags}, ",
             "#{item.category}, #{item.isPinned}, #{item.likes}, #{item.viewCount}, ",
-            "#{item.createdAt}, #{item.updatedAt}, #{item.uploaderId}, #{item.uploaderUsername})",
+            "NOW(), NOW(), #{item.uploaderId}, #{item.uploaderUsername})",
             "</foreach>",
             "</script>"
     })

@@ -16,7 +16,7 @@ public interface VideoMapper {
             "is_pinned, view_count, created_at, updated_at, ",
             "uploader_id, uploader_username) ",
             "VALUES (#{title}, #{description}, #{src}, #{thumbnail}, #{duration}, #{tags}, ",
-            "#{isPinned}, #{viewCount}, #{createdAt}, #{updatedAt}, ",
+            "#{isPinned}, #{viewCount}, NOW(), NOW(), ",
             "#{uploaderId}, #{uploaderUsername})"
     })
     @Options(useGeneratedKeys = true, keyProperty = "id")
@@ -33,7 +33,7 @@ public interface VideoMapper {
             "<foreach collection='list' item='item' separator=','>",
             "(#{item.title}, #{item.description}, #{item.src}, #{item.thumbnail}, ",
             "#{item.duration}, #{item.tags}, #{item.isPinned}, #{item.viewCount}, ",
-            "#{item.createdAt}, #{item.updatedAt}, #{item.uploaderId}, #{item.uploaderUsername})",
+            "NOW(), NOW(), #{item.uploaderId}, #{item.uploaderUsername})",
             "</foreach>",
             "</script>"
     })

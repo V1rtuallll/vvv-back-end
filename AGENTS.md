@@ -64,7 +64,7 @@ src/main/java/com/v1rtual/vvv_backend/
 ├── entity/           数据库实体
 ├── dto/              入参对象（LoginDTO、RegisterDTO）
 ├── vo/               出参对象（Result、GalleryVO、HomeConfig*）
-├── filter/           JwtAuthenticationFilter、MobileBlockFilter
+├── filter/           JwtAuthenticationFilter
 ├── security/         CurrentUserProvider、OwnerAccess
 ├── exception/        统一错误契约：GlobalExceptionHandler、ApiErrorController、401/403 处理器
 ├── config/           SecurityConfig、WebConfig、CorsConfig、OssConfig
@@ -178,10 +178,14 @@ ssh <生产主机> 'sudo /usr/local/sbin/v1rtual-deploy-backend <旧revision>'
   **没有外键、没有唯一约束**，全靠 `src` 字符串约定。而 `AdminMediaService.update`
   **只写类型表**，Gallery 列表读的却是 `gallery` 表 —— 所以后台改完标题，Gallery 页面不会变，
   而且不报错。给 Gallery 加编辑/删除接口时必须同时处理两张表。
-- **`MobileBlockFilter` 早于 Spring Security 生效。** 它由 `config/WebConfig.java` 用
-  `FilterRegistrationBean` 注册（`addUrlPatterns("/*")` + `setOrder(1)`），是 Servlet 容器级过滤器，
-  所以 `SecurityConfig` 的 `permitAll` 白名单**绕不过它**。另外前端 `../vvv/index.html` 里
-  还有一段功能重叠的内联拦截脚本。
+- **浏览器发同源 POST 也会带 `Origin`，而 Spring 6 只要看到 `Origin` 就走 CORS 校验。**
+  `CorsConfig` 的 `allowedOrigins` 里少一个实际访问的域名，响应就是
+  **403「Invalid CORS request」**：登录、上传、评论、编辑、删除这些**写操作全部失效**，
+  而 GET 因为同源不带 `Origin` 看起来完全正常 —— 本地开发（`localhost:3001` 在白名单里）
+  更是一点问题都没有，极难发现。**改 `CorsConfig` 之后必须跑 `CorsConfigTest`**，
+  它会对每个允许来源各发一次请求并断言不被 CORS 拒掉。
+- 移动端拦截已在 2026-09-13 移除：`MobileBlockFilter`、`config/WebConfig.java` 与
+  `../vvv/index.html` 里的内联脚本都不在了，手机端可以正常访问。改动前请确认这两处仍是空的。
 - **明文密钥曾进过 git 历史，其中 OSS key 与当前在用的是同一把。**
   `src/main/resources/application.yml` 现在已被 `.gitignore` 忽略、也未被跟踪，
   所以**当前状态是安全的**；但历史上 `89aa88b`（oss接入）提交过它，`6285c7d` 才删除，

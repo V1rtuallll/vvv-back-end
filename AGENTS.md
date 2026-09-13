@@ -42,8 +42,17 @@ docs: describe backend service boundaries
 
 ## 技术栈
 
-Spring Boot 3.5.9、Java 21、MyBatis（**全部是注解 SQL，没有 XML**）、Lombok、MySQL 8、
+Spring Boot 3.5.9、Java 21、MyBatis（**全部是注解 SQL，没有 XML**）、Lombok、
 阿里云 OSS SDK、jjwt、Spring Security。构建用 Maven Wrapper（`./mvnw`），生产是 systemd 托管的可执行 JAR。
+
+**MySQL 版本不一致，写 SQL 时必须以低版本为准：**
+
+| 环境 | 版本 |
+| --- | --- |
+| 本地开发库 | MySQL **8.0.40**（Homebrew） |
+| **生产库** | MySQL **5.6.50** |
+
+本机能跑通不代表生产能跑。**不要使用 MySQL 8 才有的特性**，详见「已知陷阱」。
 
 ## 目录结构
 
@@ -119,8 +128,33 @@ src/main/java/com/v1rtual/vvv_backend/
 - **顺序是先执行迁移，再发布代码**：新代码可能引用新列，旧代码不会引用它，
   所以先加结构时线上是连续的；反过来会让新代码在旧结构上直接报错
 
+新增一处结构变更的完整流程：
+
+```bash
+# 1. 建文件 db/migrations/V002__描述.sql（编号取现有最大值 +1），写 DDL
+#    不要在里面写 CREATE DATABASE / USE —— 连接目标由调用方决定
+# 2. 对每个环境执行
+MYSQL_PWD=<密码> db/migrate.sh
+DB_HOST=<生产主机> DB_USER=vvv MYSQL_PWD=<密码> db/migrate.sh
+# 3. 验证各端收敛（三处指纹必须相同）
+MYSQL_PWD=<密码> db/fingerprint.sh
+```
+
+指纹会抹平整型显示宽度、enum 空格、排序规则这些**无语义差异**，所以本机 MySQL 8
+与生产 MySQL 5.6 的结构可以放在一起比。指纹不同就是真的不同，必须查清楚。
+
 ## 已知陷阱
 
+- **生产是 MySQL 5.6，写 SQL 和建表语句都不能用 8 才有的特性。** 本地开发库是 8.0.40，
+  所以「本机跑通了」完全不能说明生产能跑。已经踩过的坑：
+  - 排序规则 `utf8mb4_0900_ai_ci` 是 **MySQL 8 专有**，5.6 上直接报错。一律用
+    `utf8mb4_unicode_ci`（生产库用的就是它）。`vvv.sql` 快照里曾有 4 张表误用了 0900，
+    已修正——但同类问题要自己留意
+  - `REGEXP_REPLACE`（8.0.4+）、窗口函数、CTE（`WITH`）、`JSON_TABLE` 都不可用
+  - 整型的显示宽度（`bigint(20)`）在 8 里被移除，写 `bigint` 即可，两边都能跑
+  - 降序索引 `KEY x (col DESC)` 在 5.6 会**解析后忽略**（不报错，但也不生效），
+    现有表里就有，不要以为是真降序索引
+  - 新写 DDL 之后，用 `db/fingerprint.sh` 在本机与生产各跑一次比对，别只在本机验
 - **媒体元数据存在两份，且写路径不对称。** 上传时会同时往 `gallery` 表和对应的
   `photo` / `gif` / `video` / `music` 类型表写相同的 title/description/src，两表之间
   **没有外键、没有唯一约束**，全靠 `src` 字符串约定。而 `AdminMediaService.update`
@@ -130,9 +164,13 @@ src/main/java/com/v1rtual/vvv_backend/
   `FilterRegistrationBean` 注册（`addUrlPatterns("/*")` + `setOrder(1)`），是 Servlet 容器级过滤器，
   所以 `SecurityConfig` 的 `permitAll` 白名单**绕不过它**。另外前端 `../vvv/index.html` 里
   还有一段功能重叠的内联拦截脚本。
-- **`application.yml` 里有明文密钥**（数据库密码、OSS `access-key-secret`、JWT secret），
-  已经提交进仓库历史。这是既有技术债，需要轮换；**不要再往里加新的明文密钥**。
-  生产配置只放在服务器 `/etc/v1rtual/application-prod.yml`（不进 Git）。
+- **明文密钥曾进过 git 历史，其中 OSS key 与当前在用的是同一把。**
+  `src/main/resources/application.yml` 现在已被 `.gitignore` 忽略、也未被跟踪，
+  所以**当前状态是安全的**；但历史上 `89aa88b`（oss接入）提交过它，`6285c7d` 才删除，
+  `git log -S "<access-key-id>"` 仍能搜到。结论：**那把 OSS key 已泄漏，需要轮换**，
+  JWT secret 同理。新人接手时不要以为「文件被忽略就等于没泄漏过」。
+  生产配置只放在服务器 `/etc/v1rtual/application-prod.yml`（不进 Git），
+  **也不要再往仓库里加任何明文密钥**。
 - **`spring.servlet.multipart` 配的是单文件 20000MB / 单请求 500000MB。**
   `UploadValidator` 会把这个值当作上限来校验，所以"按配置值提示用户"意味着提示 20GB。
 - `CommentMapper.insert` 的 SQL 里 `target_type` **硬编码为 `'gallery'`**，

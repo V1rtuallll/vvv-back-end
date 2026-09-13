@@ -35,10 +35,10 @@ refactor: split backend services and admin endpoints
 docs: describe backend service boundaries
 ```
 
-- 格式：`<type>: <英文描述>`，描述用小写开头、不加句号
+- 格式：`<type>: <中文描述>`，**type 等操作名保持英文，描述用中文**，结尾不加句号
 - 常用 type：`feat` 新功能 / `fix` 修 bug / `refactor` 重构 / `test` 测试 / `docs` 文档 / `ci` 工作流 / `chore` 杂项
 - **一个功能一个 commit**，不要把无关改动混在一起
-- 描述用英文（与历史一致）
+- 描述用中文。历史提交是英文描述，**从 2026-09-13 起统一改成中文**（type 仍然是英文）
 
 ## 技术栈
 

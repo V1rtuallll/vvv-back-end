@@ -106,6 +106,17 @@ src/main/java/com/v1rtual/vvv_backend/
   不要假设本地 MySQL 一定在跑
 - `src/test/resources/` 不存在，测试会加载主 `application.yml`。加新测试时留意这一点
 
+## 数据库迁移
+
+本项目**没有 Flyway / Liquibase**，`deploy.yml` 里也没有迁移步骤（只做「构建 JAR → SSH 上传 →
+重启 systemd」）。所以**每一处结构变更都必须手写迁移脚本**，放在 `scripts/migrations/`：
+
+- 命名 `V<三位编号>__<英文短描述>.sql`，编号只增不改；**已执行过的文件不要再改**，要改就加新编号
+- 每个脚本自己往 `schema_migrations` 表写一行，执行完可以查表确认
+- 执行方式与顺序见 `scripts/migrations/README.md`
+- **顺序通常是「先执行迁移，再发布代码」**：新代码可能引用新列，旧代码不会引用它，
+  所以先加结构时线上是连续的；反过来会让新代码在旧结构上直接报错
+
 ## 已知陷阱
 
 - **媒体元数据存在两份，且写路径不对称。** 上传时会同时往 `gallery` 表和对应的

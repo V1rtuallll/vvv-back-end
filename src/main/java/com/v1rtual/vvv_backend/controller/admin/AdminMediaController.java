@@ -2,6 +2,7 @@ package com.v1rtual.vvv_backend.controller.admin;
 
 import java.util.Map;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -31,7 +32,9 @@ public class AdminMediaController {
   @PostMapping("/upload-resource")
   public Result<Map<String, String>> upload(@RequestPart("file") MultipartFile file) {
     User user = currentUserProvider.getCurrentUser().orElse(null);
-    if (!ownerAccess.isOwner(user)) return Result.error("这扇银门只为你一人敞开哦～🖤");
+    if (!ownerAccess.isOwner(user)) {
+      return Result.error(HttpStatus.FORBIDDEN.value(), OwnerAccess.DENIED_MESSAGE);
+    }
     return mediaService.upload(file, user);
   }
 
@@ -40,13 +43,18 @@ public class AdminMediaController {
       @RequestParam(required = false) String type,
       @RequestParam(defaultValue = "1") int page,
       @RequestParam(defaultValue = "10") int limit) {
-    if (!ownerAccess.isCurrentUserOwner()) return Result.error("这扇银门只为你一人敞开哦～🖤");
+    // 权限不足不是业务错误：HTTP 状态码与响应体 code 都是 403，文案保持中性
+    if (!ownerAccess.isCurrentUserOwner()) {
+      return Result.error(HttpStatus.FORBIDDEN.value(), OwnerAccess.DENIED_MESSAGE);
+    }
     return mediaService.list(type, page, limit);
   }
 
   @PostMapping("/resource/update")
   public Result<Void> update(@RequestBody Map<String, Object> body) {
-    if (!ownerAccess.isCurrentUserOwner()) return Result.error("这扇银门只为你一人敞开哦～🖤");
+    if (!ownerAccess.isCurrentUserOwner()) {
+      return Result.error(HttpStatus.FORBIDDEN.value(), OwnerAccess.DENIED_MESSAGE);
+    }
     return mediaService.update(body);
   }
 }

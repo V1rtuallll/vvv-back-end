@@ -4,6 +4,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -25,11 +26,14 @@ public class AdminResourceSyncController {
 
   @PostMapping("/sync-oss-to-db")
   public Result<Map<String, Integer>> sync(@RequestBody(required = false) Map<String, List<String>> body) {
-    if (!ownerAccess.isCurrentUserOwner()) return Result.error("这扇银门只为你一人敞开哦～🖤");
+    // 权限不足不是业务错误：HTTP 状态码与响应体 code 都是 403，文案保持中性
+    if (!ownerAccess.isCurrentUserOwner()) {
+      return Result.error(HttpStatus.FORBIDDEN.value(), OwnerAccess.DENIED_MESSAGE);
+    }
     List<String> types = body != null && body.containsKey("types")
         ? body.get("types")
         : Arrays.asList("video", "gif", "music", "photo");
     int inserted = resourceSyncService.syncOssToDatabase(types);
-    return Result.success(Map.of("insertedCount", inserted), "同步完成！本次新增 " + inserted + " 条资源～🖤✞");
+    return Result.success(Map.of("insertedCount", inserted), "同步完成，本次新增 " + inserted + " 条资源");
   }
 }

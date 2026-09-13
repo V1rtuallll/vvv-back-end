@@ -13,8 +13,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 
 /**
- * OSS上传控制器～像一扇被霓虹环抱的银门
- * 前端温柔呼唤，后端温柔守护
+ * OSS 上传控制器：按 media type 选择目标目录并返回可访问 URL。
  */
 @RestController
 @RequestMapping("/api/oss")
@@ -26,8 +25,8 @@ public class OssController {
   private final UploadValidator uploadValidator;
 
   /**
-   * 通用上传接口～根据type自动选择目录
-   * 
+   * 通用上传接口，根据 type 自动选择目录。
+   *
    * @param file 文件
    * @param type 类型：imgs/music/gif/video
    * @return URL
@@ -44,7 +43,7 @@ public class OssController {
         case "music" -> OssUtil.FileType.MUSIC;
         case "gif" -> OssUtil.FileType.GIF;
         case "video" -> OssUtil.FileType.VIDEO;
-        default -> throw new IllegalArgumentException("不支持的类型哦～目前支持 imgs/music/gif/video");
+        default -> throw new IllegalArgumentException("不支持的类型，目前支持 imgs/music/gif/video");
       };
       OssUtil.FileType resolvedType = MediaTypeDirectory.directoryFor(mediaType);
       if (requestedType != resolvedType) return Result.error("请求类型与文件实际类型不一致");
@@ -57,11 +56,11 @@ public class OssController {
   private Result<String> uploadToOss(MultipartFile file, String type, OssUtil.FileType fileType) {
     try {
       String url = ossUtil.upload(file, fileType);
-      log.info("成功上传{}文件～URL: {}", type, url);
-      return Result.success(url, "上传成功啦～");
+      log.info("上传 {} 文件成功，URL: {}", type, url);
+      return Result.success(url, "上传成功");
     } catch (IOException e) {
-      log.error("上传失败啦～", e);
-      return Result.error("上传失败了～再试试？🖤");
+      log.error("上传失败", e);
+      return Result.error("上传失败");
     }
   }
 

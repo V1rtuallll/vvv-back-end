@@ -21,6 +21,8 @@ import com.v1rtual.vvv_backend.mapper.GalleryLikeMapper;
 import com.v1rtual.vvv_backend.mapper.GalleryMapper;
 import com.v1rtual.vvv_backend.mapper.UserMapper;
 import com.v1rtual.vvv_backend.service.PageParams;
+import com.v1rtual.vvv_backend.vo.GalleryItemVO;
+import com.v1rtual.vvv_backend.vo.PageResultVO;
 import com.v1rtual.vvv_backend.vo.Result;
 
 import lombok.RequiredArgsConstructor;
@@ -35,7 +37,7 @@ public class GalleryQueryService {
   private final CommentLikeMapper commentLikeMapper;
   private final GalleryLikeMapper galleryLikeMapper;
 
-  public Result<Map<String, Object>> list(int page, int limit, String type) {
+  public Result<PageResultVO<GalleryItemVO>> list(int page, int limit, String type) {
     if (!PageParams.isValid(page, limit)) {
       return Result.error(400, "分页参数无效，page 必须大于等于 1，limit 必须在 1 到 100 之间");
     }
@@ -54,27 +56,29 @@ public class GalleryQueryService {
     }
     Map<Long, Long> commentCounts = countCommentsByGalleryId(galleryList);
 
-    List<Map<String, Object>> listWithAvatar = galleryList.stream().map(gallery -> {
+    List<GalleryItemVO> items = galleryList.stream().map(gallery -> {
       User uploader = userMap.get(gallery.getUserId());
-      Map<String, Object> item = new HashMap<>();
-      item.put("id", gallery.getId());
-      item.put("type", gallery.getType());
-      item.put("title", gallery.getTitle());
-      item.put("description", gallery.getDescription());
-      item.put("src", gallery.getSrc());
-      item.put("likes", gallery.getLikes());
-      item.put("commentCount", commentCounts.getOrDefault(gallery.getId(), 0L));
-      item.put("createdAt", gallery.getCreatedAt());
-      item.put("userId", gallery.getUserId());
-      item.put("uploaderUsername", uploader != null ? uploader.getUsername() : "神秘人");
-      item.put("uploaderAvatar", uploader != null && uploader.getAvatar() != null
-          ? uploader.getAvatar()
-          : "/default-avatar.gif");
-      return item;
+      return GalleryItemVO.builder()
+          .id(gallery.getId())
+          .type(gallery.getType() == null ? null : gallery.getType().name())
+          .title(gallery.getTitle())
+          .description(gallery.getDescription())
+          .src(gallery.getSrc())
+          .likes(gallery.getLikes())
+          .commentCount(commentCounts.getOrDefault(gallery.getId(), 0L))
+          .createdAt(gallery.getCreatedAt())
+          .userId(gallery.getUserId())
+          .uploaderUsername(uploader != null ? uploader.getUsername() : "神秘人")
+          .uploaderAvatar(uploader != null && uploader.getAvatar() != null
+              ? uploader.getAvatar()
+              : "/default-avatar.gif")
+          .build();
     }).collect(Collectors.toList());
 
-    return Result.success(Map.of("list", listWithAvatar, "total", galleryMapper.countAll(normalizedType)),
-        "加载成功");
+    return Result.success(PageResultVO.<GalleryItemVO>builder()
+        .list(items)
+        .total(galleryMapper.countAll(normalizedType))
+        .build(), "加载成功");
   }
 
   /**

@@ -16,6 +16,7 @@ import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.security.CurrentUserProvider;
 import com.v1rtual.vvv_backend.security.OwnerAccess;
 import com.v1rtual.vvv_backend.service.admin.AdminMediaService;
+import com.v1rtual.vvv_backend.vo.PageResultVO;
 import com.v1rtual.vvv_backend.vo.Result;
 
 import lombok.RequiredArgsConstructor;
@@ -39,7 +40,7 @@ public class AdminMediaController {
   }
 
   @GetMapping("/resources")
-  public Result<Map<String, Object>> list(
+  public Result<PageResultVO<Map<String, Object>>> list(
       @RequestParam(required = false) String type,
       @RequestParam(defaultValue = "1") int page,
       @RequestParam(defaultValue = "10") int limit) {

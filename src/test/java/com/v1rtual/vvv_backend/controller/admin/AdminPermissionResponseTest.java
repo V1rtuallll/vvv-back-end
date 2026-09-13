@@ -20,6 +20,7 @@ import com.v1rtual.vvv_backend.service.ResourceSyncService;
 import com.v1rtual.vvv_backend.service.admin.AdminHomeConfigService;
 import com.v1rtual.vvv_backend.service.admin.AdminMediaService;
 import com.v1rtual.vvv_backend.vo.HomeConfigSaveVO;
+import com.v1rtual.vvv_backend.vo.PageResultVO;
 import com.v1rtual.vvv_backend.vo.Result;
 
 /**
@@ -52,7 +53,7 @@ class AdminPermissionResponseTest {
   void adminMediaListIsForbiddenForANonOwner() {
     denyAccess();
 
-    Result<Map<String, Object>> result = mediaController().list(null, 1, 10);
+    Result<PageResultVO<Map<String, Object>>> result = mediaController().list(null, 1, 10);
 
     assertEquals(403, result.getCode());
     assertEquals(DENIED_MESSAGE, result.getMsg());

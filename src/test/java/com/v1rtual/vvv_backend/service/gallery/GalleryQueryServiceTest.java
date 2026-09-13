@@ -27,6 +27,8 @@ import com.v1rtual.vvv_backend.mapper.CommentMapper;
 import com.v1rtual.vvv_backend.mapper.GalleryLikeMapper;
 import com.v1rtual.vvv_backend.mapper.GalleryMapper;
 import com.v1rtual.vvv_backend.mapper.UserMapper;
+import com.v1rtual.vvv_backend.vo.GalleryItemVO;
+import com.v1rtual.vvv_backend.vo.PageResultVO;
 import com.v1rtual.vvv_backend.vo.Result;
 
 class GalleryQueryServiceTest {
@@ -37,7 +39,7 @@ class GalleryQueryServiceTest {
     GalleryQueryService service = service(galleryMapper, mock(CommentMapper.class));
 
     for (int page : new int[] {0, -1, -5}) {
-      Result<Map<String, Object>> result = service.list(page, 12, null);
+      Result<PageResultVO<GalleryItemVO>> result = service.list(page, 12, null);
       assertEquals(400, result.getCode(), "page=" + page + " 应当被拒绝");
     }
     verifyNoInteractions(galleryMapper);
@@ -49,7 +51,7 @@ class GalleryQueryServiceTest {
     GalleryQueryService service = service(galleryMapper, mock(CommentMapper.class));
 
     for (int limit : new int[] {0, -1, 101, 100000}) {
-      Result<Map<String, Object>> result = service.list(1, limit, null);
+      Result<PageResultVO<GalleryItemVO>> result = service.list(1, limit, null);
       assertEquals(400, result.getCode(), "limit=" + limit + " 应当被拒绝");
     }
     verifyNoInteractions(galleryMapper);
@@ -71,7 +73,7 @@ class GalleryQueryServiceTest {
     GalleryQueryService service = service(galleryMapper, mock(CommentMapper.class));
 
     for (String type : new String[] {"pdf", "image", "gallery", "video' OR 1=1"}) {
-      Result<Map<String, Object>> result = service.list(1, 12, type);
+      Result<PageResultVO<GalleryItemVO>> result = service.list(1, 12, type);
       assertEquals(400, result.getCode(), "type=" + type + " 应当被拒绝");
     }
     verifyNoInteractions(galleryMapper);
@@ -123,15 +125,14 @@ class GalleryQueryServiceTest {
         .thenReturn(List.of(row(1L, 3L), row(4L, 7L)));
     GalleryQueryService service = service(galleryMapper, commentMapper);
 
-    Result<Map<String, Object>> result = service.list(1, 12, null);
+    Result<PageResultVO<GalleryItemVO>> result = service.list(1, 12, null);
 
     assertEquals(200, result.getCode());
-    @SuppressWarnings("unchecked")
-    List<Map<String, Object>> items = (List<Map<String, Object>>) result.getData().get("list");
+    List<GalleryItemVO> items = result.getData().getList();
     assertEquals(12, items.size());
-    assertEquals(3L, items.get(0).get("commentCount"));
-    assertEquals(0L, items.get(1).get("commentCount"));
-    assertEquals(7L, items.get(3).get("commentCount"));
+    assertEquals(3L, items.get(0).getCommentCount());
+    assertEquals(0L, items.get(1).getCommentCount());
+    assertEquals(7L, items.get(3).getCommentCount());
 
     List<Long> queriedIds = new ArrayList<>();
     for (long id = 1; id <= 12; id++) {
@@ -148,7 +149,7 @@ class GalleryQueryServiceTest {
     CommentMapper commentMapper = mock(CommentMapper.class);
     GalleryQueryService service = service(galleryMapper, commentMapper);
 
-    Result<Map<String, Object>> result = service.list(6, 12, null);
+    Result<PageResultVO<GalleryItemVO>> result = service.list(6, 12, null);
 
     assertEquals(200, result.getCode());
     verifyNoInteractions(commentMapper);

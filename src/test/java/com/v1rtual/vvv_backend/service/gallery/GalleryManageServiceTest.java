@@ -25,6 +25,7 @@ import com.v1rtual.vvv_backend.mapper.GalleryMapper;
 import com.v1rtual.vvv_backend.security.OwnerAccess;
 import com.v1rtual.vvv_backend.service.media.OssCleanupRecordService;
 import com.v1rtual.vvv_backend.util.OssUtil;
+import com.v1rtual.vvv_backend.vo.GalleryMetadataVO;
 import com.v1rtual.vvv_backend.vo.Result;
 
 class GalleryManageServiceTest {
@@ -64,7 +65,7 @@ class GalleryManageServiceTest {
 
   @Test
   void rejectsAnonymousWrites() {
-    Result<Map<String, Object>> result = service().updateMetadata(1L, Map.of("title", "新"), null);
+    Result<GalleryMetadataVO> result = service().updateMetadata(1L, Map.of("title", "新"), null);
 
     assertEquals(401, result.getCode());
     verify(galleryMapper, never()).updateMetadata(any());
@@ -75,7 +76,7 @@ class GalleryManageServiceTest {
     when(galleryMapper.selectById(1L)).thenReturn(gallery(1L, 100L));
     when(ownerAccess.isOwner(any())).thenReturn(false);
 
-    Result<Map<String, Object>> result =
+    Result<GalleryMetadataVO> result =
         service().updateMetadata(1L, Map.of("title", "新"), user(200L, "路人"));
 
     assertEquals(403, result.getCode());
@@ -89,7 +90,7 @@ class GalleryManageServiceTest {
     when(galleryMapper.selectById(1L)).thenReturn(stored);
     when(ownerAccess.isOwner(any())).thenReturn(false);
 
-    Result<Map<String, Object>> result =
+    Result<GalleryMetadataVO> result =
         service().updateMetadata(1L, Map.of("title", "新标题", "description", "新描述"), user(100L, "作者"));
 
     assertEquals(200, result.getCode());
@@ -104,7 +105,7 @@ class GalleryManageServiceTest {
     when(galleryMapper.selectById(1L)).thenReturn(stored);
     when(ownerAccess.isOwner(any())).thenReturn(true);
 
-    Result<Map<String, Object>> result =
+    Result<GalleryMetadataVO> result =
         service().updateMetadata(1L, Map.of("title", "管理员改的"), user(999L, "V1rtual"));
 
     assertEquals(200, result.getCode());
@@ -131,7 +132,7 @@ class GalleryManageServiceTest {
     body.put("type", "video");
     body.put("user_id", 999L);
 
-    Result<Map<String, Object>> result = service().updateMetadata(1L, body, user(100L, "作者"));
+    Result<GalleryMetadataVO> result = service().updateMetadata(1L, body, user(100L, "作者"));
 
     assertEquals(200, result.getCode());
     assertEquals("新标题", stored.getTitle());
@@ -145,7 +146,7 @@ class GalleryManageServiceTest {
     when(galleryMapper.selectById(1L)).thenReturn(gallery(1L, 100L));
     when(ownerAccess.isOwner(any())).thenReturn(false);
 
-    Result<Map<String, Object>> result =
+    Result<GalleryMetadataVO> result =
         service().updateMetadata(1L, Map.of("src", "https://evil.test/x.png"), user(100L, "作者"));
 
     assertEquals(400, result.getCode());

@@ -26,6 +26,7 @@ import com.v1rtual.vvv_backend.service.PageParams;
 import com.v1rtual.vvv_backend.service.media.UploadValidator;
 import com.v1rtual.vvv_backend.service.media.MediaTypeDirectory;
 import com.v1rtual.vvv_backend.util.OssUtil;
+import com.v1rtual.vvv_backend.vo.PageResultVO;
 import com.v1rtual.vvv_backend.vo.Result;
 
 import lombok.RequiredArgsConstructor;
@@ -76,7 +77,7 @@ public class AdminMediaService {
     }
   }
 
-  public Result<Map<String, Object>> list(String type, int page, int limit) {
+  public Result<PageResultVO<Map<String, Object>>> list(String type, int page, int limit) {
     if (!PageParams.isValid(page, limit)) {
       return Result.error(400, "分页参数无效，page 必须大于等于 1，limit 必须在 1 到 100 之间");
     }
@@ -113,10 +114,12 @@ public class AdminMediaService {
           }
         }
       }
-      Map<String, Object> result = new HashMap<>();
-      result.put("list", list);
-      result.put("total", total);
-      return Result.success(result, "资源列表加载成功，共 " + total + " 条");
+      // 行数据保持 Map 原样：这些键是 mapper 里的 SQL 列名（uploader_username、created_at 等），
+      // 前端按原样读取。换成驼峰 VO 会改变对外 JSON 的键名，直接改坏后台页面。
+      return Result.success(PageResultVO.<Map<String, Object>>builder()
+          .list(list)
+          .total(total)
+          .build(), "资源列表加载成功，共 " + total + " 条");
     } catch (Exception e) {
       log.error("加载资源列表失败", e);
       return Result.error("资源列表加载失败");

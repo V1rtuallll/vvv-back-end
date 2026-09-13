@@ -15,6 +15,7 @@ import com.v1rtual.vvv_backend.mapper.GalleryMapper;
 import com.v1rtual.vvv_backend.security.OwnerAccess;
 import com.v1rtual.vvv_backend.service.media.OssCleanupRecordService;
 import com.v1rtual.vvv_backend.util.OssUtil;
+import com.v1rtual.vvv_backend.vo.GalleryMetadataVO;
 import com.v1rtual.vvv_backend.vo.Result;
 
 import lombok.RequiredArgsConstructor;
@@ -44,7 +45,7 @@ public class GalleryManageService {
   private final OssUtil ossUtil;
   private final OwnerAccess ownerAccess;
 
-  public Result<Map<String, Object>> updateMetadata(Long id, Map<String, Object> body, User currentUser) {
+  public Result<GalleryMetadataVO> updateMetadata(Long id, Map<String, Object> body, User currentUser) {
     if (currentUser == null) return Result.error(401, "未登录或登录已过期");
     if (id == null || id <= 0) return Result.error(400, "资源ID无效");
     if (body == null || body.isEmpty()) return Result.error(400, "请求参数不能为空");
@@ -139,17 +140,17 @@ public class GalleryManageService {
     }
   }
 
-  private Map<String, Object> toItem(Gallery gallery) {
-    Map<String, Object> item = new LinkedHashMap<>();
-    item.put("id", gallery.getId());
-    item.put("type", gallery.getType());
-    item.put("title", gallery.getTitle());
-    item.put("description", gallery.getDescription());
-    item.put("alt", gallery.getAlt());
-    item.put("tags", gallery.getTags());
-    item.put("category", gallery.getCategory());
-    item.put("src", gallery.getSrc());
-    item.put("userId", gallery.getUserId());
-    return item;
+  private GalleryMetadataVO toItem(Gallery gallery) {
+    return GalleryMetadataVO.builder()
+        .id(gallery.getId())
+        .type(gallery.getType() == null ? null : gallery.getType().name())
+        .title(gallery.getTitle())
+        .description(gallery.getDescription())
+        .alt(gallery.getAlt())
+        .tags(gallery.getTags())
+        .category(gallery.getCategory())
+        .src(gallery.getSrc())
+        .userId(gallery.getUserId())
+        .build();
   }
 }

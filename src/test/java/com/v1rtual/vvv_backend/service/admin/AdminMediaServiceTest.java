@@ -24,6 +24,7 @@ import com.v1rtual.vvv_backend.mapper.PhotoMapper;
 import com.v1rtual.vvv_backend.mapper.VideoMapper;
 import com.v1rtual.vvv_backend.service.media.UploadValidator;
 import com.v1rtual.vvv_backend.util.OssUtil;
+import com.v1rtual.vvv_backend.vo.PageResultVO;
 import com.v1rtual.vvv_backend.vo.Result;
 
 class AdminMediaServiceTest {
@@ -38,10 +39,10 @@ class AdminMediaServiceTest {
         mock(MusicMapper.class), mock(PhotoMapper.class), allMediaMapper, mock(GalleryMapper.class),
         new UploadValidator(new MultipartProperties()));
 
-    Result<Map<String, Object>> result = service.list("all", 2, 5);
+    Result<PageResultVO<Map<String, Object>>> result = service.list("all", 2, 5);
 
-    assertEquals(expected, result.getData().get("list"));
-    assertEquals(11L, result.getData().get("total"));
+    assertEquals(expected, result.getData().getList());
+    assertEquals(11L, result.getData().getTotal());
     verify(allMediaMapper).selectAllPage(5, 5);
   }
 
@@ -51,7 +52,7 @@ class AdminMediaServiceTest {
     AdminMediaService service = service(allMediaMapper);
 
     for (int[] params : new int[][] {{0, 10}, {-1, 10}, {1, 0}, {1, -3}, {1, 101}, {1, 100000}}) {
-      Result<Map<String, Object>> result = service.list("all", params[0], params[1]);
+      Result<PageResultVO<Map<String, Object>>> result = service.list("all", params[0], params[1]);
       assertEquals(400, result.getCode(), "page=" + params[0] + ", limit=" + params[1] + " 应当被拒绝");
     }
     verifyNoInteractions(allMediaMapper);
@@ -63,7 +64,7 @@ class AdminMediaServiceTest {
     AdminMediaService service = service(allMediaMapper);
 
     for (String type : new String[] {"pdf", "unknown", "video' OR 1=1"}) {
-      Result<Map<String, Object>> result = service.list(type, 1, 10);
+      Result<PageResultVO<Map<String, Object>>> result = service.list(type, 1, 10);
       assertEquals(400, result.getCode(), "type=" + type + " 应当被拒绝");
     }
     verifyNoInteractions(allMediaMapper);
@@ -75,7 +76,7 @@ class AdminMediaServiceTest {
     when(allMediaMapper.selectAllPage(Integer.MAX_VALUE, 10)).thenReturn(List.of());
     AdminMediaService service = service(allMediaMapper);
 
-    Result<Map<String, Object>> result = service.list("all", Integer.MAX_VALUE, 10);
+    Result<PageResultVO<Map<String, Object>>> result = service.list("all", Integer.MAX_VALUE, 10);
 
     assertEquals(200, result.getCode());
     verify(allMediaMapper).selectAllPage(Integer.MAX_VALUE, 10);

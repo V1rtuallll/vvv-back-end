@@ -21,7 +21,12 @@ import com.v1rtual.vvv_backend.service.gallery.GalleryInteractionService;
 import com.v1rtual.vvv_backend.service.gallery.GalleryManageService;
 import com.v1rtual.vvv_backend.service.gallery.GalleryQueryService;
 import com.v1rtual.vvv_backend.service.gallery.GalleryUploadService;
+import com.v1rtual.vvv_backend.vo.GalleryItemVO;
+import com.v1rtual.vvv_backend.vo.GalleryMetadataVO;
+import com.v1rtual.vvv_backend.vo.PageResultVO;
 import com.v1rtual.vvv_backend.vo.Result;
+import com.v1rtual.vvv_backend.vo.UploadLimitVO;
+import com.v1rtual.vvv_backend.vo.UploadResultVO;
 
 import lombok.RequiredArgsConstructor;
 
@@ -43,7 +48,7 @@ public class GalleryController {
    * @param clientUploadId 客户端生成的 ID，超时重试时靠它幂等，必传
    */
   @PostMapping("/upload")
-  public Result<Map<String, Object>> upload(
+  public Result<UploadResultVO> upload(
       @RequestParam("file") MultipartFile file,
       @RequestParam(required = false) String title,
       @RequestParam(required = false) String description,
@@ -53,12 +58,12 @@ public class GalleryController {
 
   /** 前端据此提示大小上限，值与后端校验读的是同一份配置 */
   @GetMapping("/upload-limit")
-  public Result<Map<String, Object>> uploadLimit() {
+  public Result<UploadLimitVO> uploadLimit() {
     return uploadService.uploadLimits();
   }
 
   @GetMapping("/list")
-  public Result<Map<String, Object>> list(
+  public Result<PageResultVO<GalleryItemVO>> list(
       @RequestParam(defaultValue = "1") int page,
       @RequestParam(defaultValue = "12") int limit,
       @RequestParam(required = false) String type) {
@@ -92,7 +97,7 @@ public class GalleryController {
 
   /** 只接受 title / description / alt / tags / category，其余字段由服务端忽略 */
   @PatchMapping("/{id}")
-  public Result<Map<String, Object>> updateGallery(
+  public Result<GalleryMetadataVO> updateGallery(
       @PathVariable Long id,
       @RequestBody Map<String, Object> body) {
     return manageService.updateMetadata(id, body, currentUser());

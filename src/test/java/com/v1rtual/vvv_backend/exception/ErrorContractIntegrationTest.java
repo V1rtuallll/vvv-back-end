@@ -87,13 +87,17 @@ class ErrorContractIntegrationTest {
     assertEquals("请求方法不支持", body.getMsg());
   }
 
+  /**
+   * 不支持的类型是调用方传错了参数，语义上是 400 而不是 500：
+   * 用 500 会让「前端传错」和「服务端炸了」在监控里无法区分。
+   */
   @Test
   void businessErrorKeepsItsMessageButNoLongerReturnsHttp200() throws Exception {
     MockHttpServletResponse response = perform(get("/api/home/random").param("type", "pdf"));
 
-    assertEquals(500, response.getStatus());
+    assertEquals(400, response.getStatus());
     Result<?> body = parse(response);
-    assertEquals(500, body.getCode());
+    assertEquals(400, body.getCode());
     assertEquals("不支持的类型", body.getMsg());
     assertFalse(response.getContentAsString(StandardCharsets.UTF_8).contains("timestamp"));
   }

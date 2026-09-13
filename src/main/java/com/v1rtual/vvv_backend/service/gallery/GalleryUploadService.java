@@ -30,6 +30,8 @@ import com.v1rtual.vvv_backend.service.media.OssCleanupRecordService;
 import com.v1rtual.vvv_backend.service.media.UploadValidator;
 import com.v1rtual.vvv_backend.util.OssUtil;
 import com.v1rtual.vvv_backend.vo.Result;
+import com.v1rtual.vvv_backend.vo.UploadLimitVO;
+import com.v1rtual.vvv_backend.vo.UploadResultVO;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -65,7 +67,7 @@ public class GalleryUploadService {
    * @return 资源 ID、URL、类型与最终状态
    */
   @Transactional
-  public Result<Map<String, Object>> uploadOne(MultipartFile file, String title, String description,
+  public Result<UploadResultVO> uploadOne(MultipartFile file, String title, String description,
       String clientUploadId, User user) {
     if (user == null) return Result.error(401, "未登录或登录已过期");
     if (file == null || file.isEmpty()) return Result.error(400, "文件不能为空");
@@ -132,11 +134,11 @@ public class GalleryUploadService {
   }
 
   /** 单文件与单请求的大小限制都来自配置，前端提示与后端校验共用这一份值。 */
-  public Result<Map<String, Object>> uploadLimits() {
-    Map<String, Object> limits = new LinkedHashMap<>();
-    limits.put("maxFileSizeBytes", multipartProperties.getMaxFileSize().toBytes());
-    limits.put("maxRequestSizeBytes", multipartProperties.getMaxRequestSize().toBytes());
-    return Result.success(limits, "上传限制");
+  public Result<UploadLimitVO> uploadLimits() {
+    return Result.success(UploadLimitVO.builder()
+        .maxFileSizeBytes(multipartProperties.getMaxFileSize().toBytes())
+        .maxRequestSizeBytes(multipartProperties.getMaxRequestSize().toBytes())
+        .build(), "上传限制");
   }
 
   /**
@@ -152,13 +154,13 @@ public class GalleryUploadService {
     }
   }
 
-  private Map<String, Object> toResource(Gallery gallery, String status) {
-    Map<String, Object> resource = new LinkedHashMap<>();
-    resource.put("id", gallery.getId());
-    resource.put("url", gallery.getSrc());
-    resource.put("type", gallery.getType() == null ? null : gallery.getType().name());
-    resource.put("status", status);
-    return resource;
+  private UploadResultVO toResource(Gallery gallery, String status) {
+    return UploadResultVO.builder()
+        .id(gallery.getId())
+        .url(gallery.getSrc())
+        .type(gallery.getType() == null ? null : gallery.getType().name())
+        .status(status)
+        .build();
   }
 
   private int insertTypedMedia(ResourceType type, String title, String description, String url, User user) {

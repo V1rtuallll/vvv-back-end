@@ -9,8 +9,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import java.util.Map;
-
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.web.servlet.MultipartProperties;
 import org.springframework.dao.DuplicateKeyException;
@@ -27,6 +25,8 @@ import com.v1rtual.vvv_backend.service.media.OssCleanupRecordService;
 import com.v1rtual.vvv_backend.service.media.UploadValidator;
 import com.v1rtual.vvv_backend.util.OssUtil;
 import com.v1rtual.vvv_backend.vo.Result;
+import com.v1rtual.vvv_backend.vo.UploadLimitVO;
+import com.v1rtual.vvv_backend.vo.UploadResultVO;
 
 class GalleryUploadServiceTest {
 
@@ -66,19 +66,19 @@ class GalleryUploadServiceTest {
     });
     when(photoMapper.insert(any())).thenReturn(1);
 
-    Result<Map<String, Object>> result = service().uploadOne(png(), "标题", "描述", UPLOAD_ID, member());
+    Result<UploadResultVO> result = service().uploadOne(png(), "标题", "描述", UPLOAD_ID, member());
 
     assertEquals(200, result.getCode());
-    assertEquals(42L, result.getData().get("id"));
-    assertEquals(OSS_URL, result.getData().get("url"));
-    assertEquals("photo", result.getData().get("type"));
-    assertEquals("success", result.getData().get("status"));
+    assertEquals(42L, result.getData().getId());
+    assertEquals(OSS_URL, result.getData().getUrl());
+    assertEquals("photo", result.getData().getType());
+    assertEquals("success", result.getData().getStatus());
     verify(photoMapper).insert(any());
   }
 
   @Test
   void rejectsAnonymousUploadsBeforeTouchingOss() throws Exception {
-    Result<Map<String, Object>> result = service().uploadOne(png(), null, null, UPLOAD_ID, null);
+    Result<UploadResultVO> result = service().uploadOne(png(), null, null, UPLOAD_ID, null);
 
     assertEquals(401, result.getCode());
     verify(ossUtil, never()).upload(any(), any());
@@ -86,7 +86,7 @@ class GalleryUploadServiceTest {
 
   @Test
   void requiresAClientUploadIdSoRetriesCanBeDeduplicated() throws Exception {
-    Result<Map<String, Object>> result = service().uploadOne(png(), null, null, "  ", member());
+    Result<UploadResultVO> result = service().uploadOne(png(), null, null, "  ", member());
 
     assertEquals(400, result.getCode());
     verify(ossUtil, never()).upload(any(), any());
@@ -94,7 +94,7 @@ class GalleryUploadServiceTest {
 
   @Test
   void rejectsOverlongClientUploadIds() throws Exception {
-    Result<Map<String, Object>> result = service().uploadOne(png(), null, null, "x".repeat(65), member());
+    Result<UploadResultVO> result = service().uploadOne(png(), null, null, "x".repeat(65), member());
 
     assertEquals(400, result.getCode());
     verify(ossUtil, never()).upload(any(), any());
@@ -107,7 +107,7 @@ class GalleryUploadServiceTest {
   void reportsWhyAFileWasRejectedInsteadOfSkippingItSilently() throws Exception {
     MockMultipartFile text = new MockMultipartFile("file", "note.txt", "text/plain", "hi".getBytes());
 
-    Result<Map<String, Object>> result = service().uploadOne(text, null, null, UPLOAD_ID, member());
+    Result<UploadResultVO> result = service().uploadOne(text, null, null, UPLOAD_ID, member());
 
     assertEquals(400, result.getCode());
     assertEquals("文件类型与扩展名不匹配或不受支持", result.getMsg());
@@ -119,11 +119,11 @@ class GalleryUploadServiceTest {
     Gallery existing = Gallery.builder().id(7L).src(OSS_URL).build();
     when(galleryMapper.selectByClientUploadId(UPLOAD_ID)).thenReturn(existing);
 
-    Result<Map<String, Object>> result = service().uploadOne(png(), null, null, UPLOAD_ID, member());
+    Result<UploadResultVO> result = service().uploadOne(png(), null, null, UPLOAD_ID, member());
 
     assertEquals(200, result.getCode());
-    assertEquals(7L, result.getData().get("id"));
-    assertEquals("duplicate", result.getData().get("status"));
+    assertEquals(7L, result.getData().getId());
+    assertEquals("duplicate", result.getData().getStatus());
     verify(ossUtil, never()).upload(any(), any());
     verify(galleryMapper, never()).insert(any());
   }
@@ -133,7 +133,7 @@ class GalleryUploadServiceTest {
     when(ossUtil.upload(any(), any())).thenReturn(OSS_URL);
     when(galleryMapper.insert(any())).thenThrow(new IllegalStateException("db unavailable"));
 
-    Result<Map<String, Object>> result = service().uploadOne(png(), null, null, UPLOAD_ID, member());
+    Result<UploadResultVO> result = service().uploadOne(png(), null, null, UPLOAD_ID, member());
 
     assertEquals(500, result.getCode());
     verify(ossUtil).deleteByPublicUrl(OSS_URL);
@@ -149,7 +149,7 @@ class GalleryUploadServiceTest {
     when(galleryMapper.insert(any())).thenThrow(new IllegalStateException("db unavailable"));
     doThrow(new RuntimeException("oss down")).when(ossUtil).deleteByPublicUrl(OSS_URL);
 
-    Result<Map<String, Object>> result = service().uploadOne(png(), null, null, UPLOAD_ID, member());
+    Result<UploadResultVO> result = service().uploadOne(png(), null, null, UPLOAD_ID, member());
 
     assertEquals(500, result.getCode());
     verify(cleanupRecordService).recordFailure(anyString(), anyString());
@@ -163,11 +163,11 @@ class GalleryUploadServiceTest {
     // 第一次幂等检查时还没有，插入撞唯一索引后再查就能查到
     when(galleryMapper.selectByClientUploadId(UPLOAD_ID)).thenReturn(null, winner);
 
-    Result<Map<String, Object>> result = service().uploadOne(png(), null, null, UPLOAD_ID, member());
+    Result<UploadResultVO> result = service().uploadOne(png(), null, null, UPLOAD_ID, member());
 
     assertEquals(200, result.getCode());
-    assertEquals(9L, result.getData().get("id"));
-    assertEquals("duplicate", result.getData().get("status"));
+    assertEquals(9L, result.getData().getId());
+    assertEquals("duplicate", result.getData().getStatus());
     verify(ossUtil).deleteByPublicUrl(OSS_URL);
   }
 
@@ -176,9 +176,9 @@ class GalleryUploadServiceTest {
     multipartProperties.setMaxFileSize(org.springframework.util.unit.DataSize.ofMegabytes(5));
     multipartProperties.setMaxRequestSize(org.springframework.util.unit.DataSize.ofMegabytes(20));
 
-    Result<Map<String, Object>> result = service().uploadLimits();
+    Result<UploadLimitVO> result = service().uploadLimits();
 
-    assertEquals(5L * 1024 * 1024, result.getData().get("maxFileSizeBytes"));
-    assertEquals(20L * 1024 * 1024, result.getData().get("maxRequestSizeBytes"));
+    assertEquals(5L * 1024 * 1024, result.getData().getMaxFileSizeBytes());
+    assertEquals(20L * 1024 * 1024, result.getData().getMaxRequestSizeBytes());
   }
 }

@@ -3,7 +3,7 @@ package com.v1rtual.vvv_backend.mapper;
 import java.util.List;
 import java.util.Map;
 
-import org.apache.commons.lang3.StringUtils;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Options;
@@ -28,14 +28,14 @@ public interface GalleryMapper {
   @Options(useGeneratedKeys = true, keyProperty = "id")
   int insert(Gallery gallery);
 
-  // 分页列表（支持type过滤）
+  // 分页列表（支持type过滤）。offset 用 long，避免 (page - 1) * limit 在 int 下溢出
   @Select("<script>" +
       "SELECT * FROM gallery " +
       "<if test='type != null and type != \"\"'> WHERE type = #{type} </if>" +
       "ORDER BY created_at DESC " +
       "LIMIT #{offset}, #{limit}" +
       "</script>")
-  List<Gallery> selectPage(@Param("offset") int offset, @Param("limit") int limit, @Param("type") String type);
+  List<Gallery> selectPage(@Param("offset") long offset, @Param("limit") int limit, @Param("type") String type);
 
   @Select("<script>" +
       "SELECT COUNT(*) FROM gallery " +
@@ -46,27 +46,43 @@ public interface GalleryMapper {
   @Select("SELECT * FROM gallery WHERE id = #{id}")
   Gallery selectById(Long id);
 
-  // 点赞+1（简单实现，后续可用Redis防刷）
+  /**
+   * 按 src 查行。gallery 与 photo/gif/video/music 以 src 关联，没有外键，
+   * 后台编辑类型表后靠它定位需要同步的 gallery 行。
+   */
+  @Select("SELECT * FROM gallery WHERE src = #{src} LIMIT 1")
+  Gallery selectBySrc(String src);
+
+  /**
+   * 更新元数据。SET 列表只含可编辑列，src / type / user_id 不参与，
+   * 避免任何编辑入口改掉两表之间的关联键与归属。
+   */
+  @Update("UPDATE gallery SET title = #{title}, description = #{description}, alt = #{alt}, " +
+      "tags = #{tags}, category = #{category}, duration = #{duration}, updated_at = NOW() " +
+      "WHERE id = #{id}")
+  int updateMetadata(Gallery gallery);
+
+  @Delete("DELETE FROM gallery WHERE id = #{id}")
+  int deleteById(Long id);
+
+  // 点赞 +1
   @Update("UPDATE gallery SET likes = likes + 1 WHERE id = #{id}")
   int incrementLikes(Long id);
 
-  // 浏览+1
+  // 浏览 +1
   @Update("UPDATE gallery SET view_count = view_count + 1 WHERE id = #{id}")
   int incrementViewCount(Long id);
 
-  @Select("SELECT COUNT(*) FROM gallery_like WHERE user_id = #{userId} AND gallery_id = #{galleryId}")
-  int hasLiked(@Param("userId") Long userId, @Param("galleryId") Long galleryId);
-
-  @Insert("INSERT INTO gallery_like (user_id, gallery_id) VALUES (#{userId}, #{galleryId})")
-  int insertLike(@Param("userId") Long userId, @Param("galleryId") Long galleryId);
-
   /**
-   * 随机 8 条 gallery + 关联查询 user 表的 avatar
+   * 随机 8 条 gallery + 关联查询 user 表的 avatar 与当前用户名。
+   *
+   * uploaderUsername 取 user 表的当前用户名，g.uploader_username 只在用户行缺失时兜底：
+   * 快照列在用户改名后不会更新。
    */
   @Select("""
           SELECT
               g.id, g.type, g.title, g.description, g.src,
-              g.uploader_username AS uploaderUsername,
+              COALESCE(u.username, g.uploader_username) AS uploaderUsername,
               u.avatar AS uploaderAvatar,
               g.created_at AS createdAt
           FROM gallery g

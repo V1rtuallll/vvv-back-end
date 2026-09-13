@@ -6,6 +6,10 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.Function;
+import java.util.function.IntFunction;
 
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Service;
@@ -36,6 +40,8 @@ import lombok.extern.slf4j.Slf4j;
 public class HomeQueryService {
 
   private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+  private static final Set<String> RANDOM_TYPES = Set.of("video", "gif", "image", "photo");
+  private static final int PICK_ATTEMPTS = 4;
 
   private final HomeConfigMapper homeConfigMapper;
   private final ObjectMapper objectMapper;
@@ -58,41 +64,9 @@ public class HomeQueryService {
     String mainDesc = StringUtils.defaultString(config.getMainDesc(), "未知");
     String mainAlt = StringUtils.defaultString(config.getMainAlt(), "未知");
     boolean random = config.getMainRandom() != null && config.getMainRandom() == 1;
-    List<String> availableFiles = new ArrayList<>();
 
-    if (random) {
-      switch (mainType.toLowerCase()) {
-        case "video" -> {
-          Video video = videoMapper.selectRandomOne();
-          if (video != null) {
-            mainSrc = video.getSrc();
-            availableFiles = videoMapper.selectAllSrcs();
-          }
-        }
-        case "gif" -> {
-          Gif gif = gifMapper.selectRandomOne();
-          if (gif != null) {
-            mainSrc = gif.getSrc();
-            availableFiles = gifMapper.selectAllSrcs();
-          }
-        }
-        case "image", "photo" -> {
-          Photo photo = photoMapper.selectRandomOne();
-          if (photo != null) {
-            mainSrc = photo.getSrc();
-            availableFiles = photoMapper.selectAllSrcs();
-          }
-        }
-        default -> {
-          Photo photo = photoMapper.selectRandomOne();
-          if (photo != null) {
-            mainSrc = photo.getSrc();
-            availableFiles = photoMapper.selectAllSrcs();
-          }
-        }
-      }
-    }
-
+    // 随机主资源不在这里挑：前端会再请求 /api/home/random 拿单个资源。
+    // main.src 只是「随机接口失败时」的兜底值，不再下发全量媒体 URL。
     Map<String, Object> result = new HashMap<>();
     result.put("main", Map.of(
         "type", mainType,
@@ -101,68 +75,56 @@ public class HomeQueryService {
         "desc", mainDesc,
         "alt", mainAlt,
         "random", random));
-    result.put("availableFiles", availableFiles);
     result.put("galleryItems", parseGalleryItems(config.getGalleryJson()));
     return Result.success(result, "Home 配置加载成功");
   }
 
-  public Result<Map<String, Object>> getRandomMain(String type) {
-    Map<String, Object> data = new HashMap<>();
-    String randomSrc = null;
-    String uploaderUsername = "未知";
-    String uploaderAvatar = "/default-avatar.gif";
-    String uploadTime = "未知";
-    Long uploaderId = null;
+  public Result<Map<String, Object>> getRandomMain(String type, String exclude) {
+    String normalized = StringUtils.defaultString(type, "").toLowerCase();
+    if (!RANDOM_TYPES.contains(normalized)) return Result.error("不支持的类型");
 
-    switch (type.toLowerCase()) {
-      case "video" -> {
-        Video video = videoMapper.selectRandomOne();
-        if (video != null) {
-          randomSrc = video.getSrc();
-          uploaderUsername = video.getUploaderUsername();
-          uploadTime = formatTime(video.getCreatedAt());
-          uploaderId = video.getUploaderId();
-        }
-      }
-      case "gif" -> {
-        Gif gif = gifMapper.selectRandomOne();
-        if (gif != null) {
-          randomSrc = gif.getSrc();
-          uploaderUsername = gif.getUploaderUsername();
-          uploadTime = formatTime(gif.getCreatedAt());
-          uploaderId = gif.getUploaderId();
-        }
-      }
-      case "image", "photo" -> {
-        Photo photo = photoMapper.selectRandomOne();
-        if (photo != null) {
-          randomSrc = photo.getSrc();
-          uploaderUsername = photo.getUploaderUsername();
-          uploadTime = formatTime(photo.getCreatedAt());
-          uploaderId = photo.getUploaderId();
-        }
-      }
-      default -> {
-        return Result.error("不支持的类型");
-      }
+    String src = switch (normalized) {
+      case "video" ->
+          pickRandomSrc(videoMapper.countAll(), exclude, videoMapper::selectByOffset, Video::getSrc);
+      case "gif" ->
+          pickRandomSrc(gifMapper.countAll(), exclude, gifMapper::selectByOffset, Gif::getSrc);
+      default ->
+          pickRandomSrc(photoMapper.countAll(), exclude, photoMapper::selectByOffset, Photo::getSrc);
+    };
+    if (src == null) return Result.error("暂无可用资源");
+
+    // 复用 getFullItem 组装元数据：随机路径与详情路径的响应结构天然一致，
+    // 也顺带继承 selectBySrc 的类型修复（否则 title/description 会是硬编码的「未知」）。
+    Result<Map<String, Object>> item = getFullItem(src, type);
+    if (item.getCode() != 200) return item;
+    return Result.success(item.getData(), "随机资源加载成功");
+  }
+
+  /**
+   * 尽力避开 exclude：最多重试 PICK_ATTEMPTS 次；库里只剩这一条时返回它而不是报错。
+   */
+  private <T> String pickRandomSrc(long total, String exclude,
+      IntFunction<T> selectByOffset, Function<T, String> srcOf) {
+    if (total <= 0) return null;
+    int bound = (int) Math.min(total, Integer.MAX_VALUE);
+    ThreadLocalRandom random = ThreadLocalRandom.current();
+    String skipped = null;
+    for (int attempt = 0; attempt < PICK_ATTEMPTS; attempt++) {
+      T candidate = selectByOffset.apply(random.nextInt(bound));
+      if (candidate == null) continue;
+      String src = srcOf.apply(candidate);
+      if (src == null) continue;
+      if (exclude == null || !exclude.equals(src)) return src;
+      skipped = src;
     }
-
-    if (randomSrc == null) return Result.error("暂无可用资源");
-    uploaderAvatar = findAvatar(uploaderId, uploaderAvatar);
-    data.put("src", randomSrc);
-    data.put("title", "未知");
-    data.put("description", "未知");
-    data.put("alt", "随机资源");
-    data.put("uploaderAvatar", uploaderAvatar);
-    data.put("uploaderUsername", uploaderUsername);
-    data.put("uploadTime", uploadTime);
-    return Result.success(data, "随机资源加载成功");
+    return skipped;
   }
 
   public Result<Map<String, Object>> getFullItem(String src, String type) {
     Object record;
     Long uploaderId = null;
-    String uploaderUsername = "V1rtual";
+    // 快照列只作兜底：它记录的是上传当时的用户名，改名后不会更新
+    String uploaderSnapshot = null;
     String uploadTime = "未知时间";
     String title = "未知";
     String description = "未知";
@@ -173,7 +135,7 @@ public class HomeQueryService {
         record = videoMapper.selectBySrc(src);
         if (record instanceof Video video) {
           uploaderId = video.getUploaderId();
-          uploaderUsername = StringUtils.defaultString(video.getUploaderUsername(), "V1rtual");
+          uploaderSnapshot = video.getUploaderUsername();
           uploadTime = formatTimeOrUnknown(video.getCreatedAt());
           title = StringUtils.defaultString(video.getTitle(), title);
           description = StringUtils.defaultString(video.getDescription(), description);
@@ -183,7 +145,7 @@ public class HomeQueryService {
         record = gifMapper.selectBySrc(src);
         if (record instanceof Gif gif) {
           uploaderId = gif.getUploaderId();
-          uploaderUsername = StringUtils.defaultString(gif.getUploaderUsername(), "V1rtual");
+          uploaderSnapshot = gif.getUploaderUsername();
           uploadTime = formatTimeOrUnknown(gif.getCreatedAt());
           title = StringUtils.defaultString(gif.getTitle(), title);
           description = StringUtils.defaultString(gif.getDescription(), description);
@@ -194,7 +156,7 @@ public class HomeQueryService {
         record = photoMapper.selectBySrc(src);
         if (record instanceof Photo photo) {
           uploaderId = photo.getUploaderId();
-          uploaderUsername = StringUtils.defaultString(photo.getUploaderUsername(), "V1rtual");
+          uploaderSnapshot = photo.getUploaderUsername();
           uploadTime = formatTimeOrUnknown(photo.getCreatedAt());
           title = StringUtils.defaultString(photo.getTitle(), title);
           description = StringUtils.defaultString(photo.getDescription(), description);
@@ -207,15 +169,17 @@ public class HomeQueryService {
     }
 
     if (record == null) return Result.error("未找到该资源");
+    // 上传者信息按 user_id 实时关联用户表，不用会过期的快照列
+    User uploader = findUploader(uploaderId);
     Map<String, Object> data = new HashMap<>();
     data.put("src", src);
     data.put("title", title);
     data.put("description", description);
     data.put("alt", alt);
-    data.put("uploaderAvatar", findAvatar(uploaderId, "/default-avatar.gif"));
-    data.put("uploaderUsername", uploaderUsername);
+    data.put("uploaderAvatar", resolveAvatar(uploader));
+    data.put("uploaderUsername", resolveUsername(uploader, uploaderSnapshot));
     data.put("uploadTime", uploadTime);
-    return Result.success(data, "完整资源加载成功～");
+    return Result.success(data, "完整资源加载成功");
   }
 
   public Result<List<GalleryVO>> getRandomGalleries() {
@@ -223,7 +187,7 @@ public class HomeQueryService {
       return Result.success(galleryMapper.getRandomGalleriesWithAvatar(8));
     } catch (Exception e) {
       log.error("随机获取 gallery 失败", e);
-      return Result.error("获取失败...QAQ");
+      return Result.error("获取失败");
     }
   }
 
@@ -249,10 +213,30 @@ public class HomeQueryService {
     }
   }
 
-  private String findAvatar(Long userId, String defaultAvatar) {
-    if (userId == null || userId <= 0) return defaultAvatar;
-    User user = userService.findById(userId);
-    return user != null && StringUtils.isNotBlank(user.getAvatar()) ? user.getAvatar() : defaultAvatar;
+  /**
+   * 只有 uploader_id 为 NULL 才视为没有上传者：user 表里 id 0 是真实存在的账号
+   * （历史数据的 uploader_id 大量为 0），按 id &lt;= 0 跳过会让这些行的用户名永远走快照。
+   */
+  private User findUploader(Long userId) {
+    if (userId == null) return null;
+    return userService.findById(userId);
+  }
+
+  private String resolveAvatar(User uploader) {
+    return uploader != null && StringUtils.isNotBlank(uploader.getAvatar())
+        ? uploader.getAvatar()
+        : "/default-avatar.gif";
+  }
+
+  /**
+   * 上传者用户名取 user 表的当前值，快照列只在用户行缺失时兜底。
+   * 冗余快照列在用户改名后不会更新，直接读它会永久显示旧名字。
+   */
+  private String resolveUsername(User uploader, String snapshotUsername) {
+    if (uploader != null && StringUtils.isNotBlank(uploader.getUsername())) {
+      return uploader.getUsername();
+    }
+    return StringUtils.defaultString(snapshotUsername, "V1rtual");
   }
 
   private String formatTime(LocalDateTime time) {

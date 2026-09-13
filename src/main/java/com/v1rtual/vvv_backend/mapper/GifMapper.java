@@ -1,7 +1,6 @@
 package com.v1rtual.vvv_backend.mapper;
 
 import com.v1rtual.vvv_backend.entity.Gif;
-import com.v1rtual.vvv_backend.entity.Video;
 
 import org.apache.ibatis.annotations.*;
 import java.util.List;
@@ -45,32 +44,35 @@ public interface GifMapper {
     })
     List<String> selectExistSrcs(@Param("srcList") List<String> srcList);
 
-    // 随机取一条（status=1 或其他条件）
-    @Select("SELECT * FROM gif ORDER BY RAND() LIMIT 1")
-    Gif selectRandomOne();
+    // 随机取一条：先 countAll() 得总数，再随机 offset
+    @Select("SELECT * FROM gif ORDER BY id LIMIT 1 OFFSET #{offset}")
+    Gif selectByOffset(@Param("offset") int offset);
 
     // 列出所有可用 src（可加条件）
     @Select("SELECT src FROM gif")
     List<String> selectAllSrcs();
 
     @Select("SELECT * FROM gif WHERE src = #{src} LIMIT 1")
-    Video selectBySrc(String src);
+    Gif selectBySrc(String src);
 
+    // uploader_username 取 user 表的当前用户名，快照列只在用户行缺失时兜底：
+    // 快照列在用户改名后不会更新。列名必须全部限定，避免与 user 表同名列冲突。
     @Select("""
             SELECT
-                id,
+                g.id,
                 'gif' AS type,
-                src AS url,
-                title AS filename,
-                description,
-                tags,
-                is_pinned,
-                view_count,
-                created_at,
-                uploader_id,
-                uploader_username
-            FROM gif
-            ORDER BY created_at DESC
+                g.src AS url,
+                g.title AS filename,
+                g.description,
+                g.tags,
+                g.is_pinned,
+                g.view_count,
+                g.created_at,
+                g.uploader_id,
+                COALESCE(u.username, g.uploader_username) AS uploader_username
+            FROM gif g
+            LEFT JOIN user u ON g.uploader_id = u.id
+            ORDER BY g.created_at DESC
             LIMIT #{offset}, #{limit}
             """)
     List<Map<String, Object>> selectPage(@Param("offset") int offset, @Param("limit") int limit);
@@ -85,6 +87,10 @@ public interface GifMapper {
             "updated_at = NOW() " +
             "WHERE id = #{id}")
     int updateById(Gif gif);
+
+    // 删除类型表行。gallery 与类型表以 src 关联，删除 Gallery 时按 src 同步清理
+    @Delete("DELETE FROM gif WHERE src = #{src}")
+    int deleteBySrc(String src);
 
     @Select("SELECT id, title, description, src, tags, " +
             "is_pinned, view_count, created_at, updated_at, " +

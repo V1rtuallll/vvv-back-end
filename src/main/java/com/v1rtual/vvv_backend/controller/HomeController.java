@@ -27,8 +27,10 @@ public class HomeController {
   }
 
   @GetMapping("/random")
-  public Result<Map<String, Object>> getRandomMain(@RequestParam String type) {
-    return homeQueryService.getRandomMain(type);
+  public Result<Map<String, Object>> getRandomMain(
+      @RequestParam String type,
+      @RequestParam(required = false) String exclude) {
+    return homeQueryService.getRandomMain(type, exclude);
   }
 
   @GetMapping("/full-item")

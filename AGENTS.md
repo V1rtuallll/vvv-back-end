@@ -121,27 +121,41 @@ src/main/java/com/v1rtual/vvv_backend/
 
 ## 数据库迁移
 
-本项目**没有 Flyway / Liquibase**，`deploy.yml` 里也没有迁移步骤（只做「构建 JAR → SSH 上传 →
-重启 systemd」）。`db/` 目录就是替代品，**结构变更的唯一入口**，详见 `db/README.md`。
+本项目**没有 Flyway / Liquibase**。`db/` 目录就是替代品，**结构变更的唯一入口**，
+详见 `db/README.md`。
 
 - 结构变更写成 `db/migrations/V<编号>__<英文短描述>.sql`，编号只增不改
 - **已执行过的迁移绝对不能修改**：运行器记录文件的 SHA-256，内容不符会直接报错中止。
   要改结构就加更高编号
 - 执行用 `db/migrate.sh`（幂等、按版本号顺序、支持 `--dry-run`）
 - 验证各端结构是否一致用 `db/fingerprint.sh` 比对结构指纹
-- **顺序是先执行迁移，再发布代码**：新代码可能引用新列，旧代码不会引用它，
-  所以先加结构时线上是连续的；反过来会让新代码在旧结构上直接报错
+- **发布时会自动执行迁移，不需要手动跑生产**：`deploy.yml` 把 `db/` 一起上传，
+  服务器端的 `/usr/local/sbin/v1rtual-deploy-backend` 在**切换 `current` 之前**运行迁移器。
+  这样「先结构、后代码」的顺序由代码保证，而不是靠人记得。
+  新代码可能引用新列，旧代码不会引用它，所以这个顺序下线上始终是连续的；
+  反过来新代码会直接撞上旧结构
+- 发布脚本在迁移失败时**中止发布**（`current` 尚未切换，旧版本继续服务）；
+  迁移目录缺失或读不到 `/etc/v1rtual/application-prod.yml` 同样拒绝发布。
+  连接参数从生产配置里现读，密码既不进仓库也不进 CI
 
-新增一处结构变更的完整流程：
+本地验证一处结构变更：
 
 ```bash
 # 1. 建文件 db/migrations/V002__描述.sql（编号取现有最大值 +1），写 DDL
 #    不要在里面写 CREATE DATABASE / USE —— 连接目标由调用方决定
-# 2. 对每个环境执行
+# 2. 本地执行 + 比对指纹
 MYSQL_PWD=<密码> db/migrate.sh
-DB_HOST=<生产主机> DB_USER=vvv MYSQL_PWD=<密码> db/migrate.sh
-# 3. 验证各端收敛（三处指纹必须相同）
 MYSQL_PWD=<密码> db/fingerprint.sh
+# 3. 生产不用手动跑：发布后端时自动执行
+```
+
+**回滚**要把旧 revision 的 jar 与当前的 `db/` 一起放到 `/tmp`（迁移是幂等的，
+已执行的会跳过；回滚代码不回滚结构，这是刻意的）：
+
+```bash
+scp app.jar <生产主机>:/tmp/v1rtual-backend-<旧revision>.jar
+scp -r db <生产主机>:/tmp/v1rtual-backend-<旧revision>-db
+ssh <生产主机> 'sudo /usr/local/sbin/v1rtual-deploy-backend <旧revision>'
 ```
 
 指纹会抹平整型显示宽度、enum 空格、排序规则这些**无语义差异**，所以本机 MySQL 8

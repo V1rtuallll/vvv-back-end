@@ -47,4 +47,7 @@ jobs:
         run: |
           ssh_base=(ssh -i ~/.ssh/id_ed25519 -p "$DEPLOY_SSH_PORT")
           scp -i ~/.ssh/id_ed25519 -P "$DEPLOY_SSH_PORT" app.jar "$DEPLOY_USER@$DEPLOY_HOST:/tmp/v1rtual-backend-$REVISION.jar"
+          # 迁移器随发布上传：服务器端的发布脚本会在切换 current 之前执行它。
+          # 缺少这个目录时发布脚本直接拒绝执行，避免出现「代码换了、结构没跟上」。
+          scp -r -i ~/.ssh/id_ed25519 -P "$DEPLOY_SSH_PORT" db "$DEPLOY_USER@$DEPLOY_HOST:/tmp/v1rtual-backend-$REVISION-db"
           "${ssh_base[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "sudo /usr/local/sbin/v1rtual-deploy-backend $REVISION"

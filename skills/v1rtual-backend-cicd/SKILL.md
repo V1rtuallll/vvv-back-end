@@ -35,9 +35,16 @@ Read [server-contract.md](references/server-contract.md) before changing deploym
 1. Create the server deploy user, release directories, and `/etc/v1rtual/application-prod.yml` with mode `0600`.
 2. Install the systemd service from `assets/server/`.
 3. Install the backend deploy script under `/usr/local/sbin/` and restrict its sudo permissions to the deploy user.
-4. Add `assets/workflows/deploy.yml` as `.github/workflows/deploy.yml`.
+   It runs `db/migrate.sh` from the uploaded `db/` directory **before** switching `current`, reading
+   connection parameters from `/etc/v1rtual/application-prod.yml`. A missing `db/` directory or an
+   unreadable production config aborts the release.
+4. Add `assets/workflows/deploy.yml` as `.github/workflows/deploy.yml`. It uploads `app.jar` and `db/`.
 5. Add GitHub Actions secrets. Use `SSH_KNOWN_HOSTS`, not blind `ssh-keyscan` during deployment.
 6. Run `workflow_dispatch` for a chosen branch, then verify the backend endpoint. Keep deployment manual; all pushes already run CI.
+
+`assets/` holds copies of files that live elsewhere (the workflow and the server-side script).
+Keep them byte-identical to their deployed counterparts — nothing checks this automatically,
+and the two drifted apart once already.
 
 ## Backend Configuration
 
@@ -46,6 +53,14 @@ Do not create a production configuration file in the repository. Copy `assets/se
 ## Verification And Rollback
 
 - Backend: verify the JAR is non-empty, restart `spring_V1rtual.service`, check `systemctl is-active`, then request a configured health URL. Do not assume Actuator is publicly reachable.
-- Rollback backend: `sudo /usr/local/sbin/v1rtual-deploy-backend <previous-revision>`.
+- Rollback backend: stage the previous revision's JAR **and the current `db/` directory**, then run
+  the deploy script. Migrations are idempotent, so the migration step is a no-op; rolling the code
+  back deliberately does not roll the schema back.
+
+  ```bash
+  scp app.jar <host>:/tmp/v1rtual-backend-<previous-revision>.jar
+  scp -r db <host>:/tmp/v1rtual-backend-<previous-revision>-db
+  ssh <host> 'sudo /usr/local/sbin/v1rtual-deploy-backend <previous-revision>'
+  ```
 
 Run `scripts/validate-templates.sh` after editing this skill. It only validates bundled shell/YAML template structure; it does not contact a server.

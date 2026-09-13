@@ -99,11 +99,20 @@ db/migrate.sh    # 补齐快照之后新增的迁移
 结构变更必须**先于**代码发布：新代码可能引用新列，而旧代码不会引用它，
 所以「先加结构、再发代码」时线上是连续的；反过来新代码会在旧结构上直接报错。
 
+这个顺序**由发布流程保证，不需要手动执行**：`deploy.yml` 把 `db/` 一起上传到服务器，
+`/usr/local/sbin/v1rtual-deploy-backend` 在切换 `current` 之前运行 `db/migrate.sh`。
+迁移失败就中止发布 —— 那时 `current` 还没切，旧版本继续服务。
+迁移目录缺失、或读不到 `/etc/v1rtual/application-prod.yml`，同样拒绝发布。
+
 ```
-① db/migrate.sh → ② 发布后端 → ③ 发布前端
+发布后端：db/migrate.sh（自动）→ 切换 current → 重启服务 → 发布前端
 ```
 
 与 `CICD规范.md` 的「后端接口变更时先发布后端并验证 API，再发布前端」一致。
+
+连接参数从服务器上的 `/etc/v1rtual/application-prod.yml` 现读，密码既不进仓库也不进 CI。
+回滚代码时把当前的 `db/` 一并 staging 过去即可：迁移是幂等的，已执行的会跳过；
+**回滚代码不回滚结构**，这是刻意的。
 
 ## 已执行的迁移
 

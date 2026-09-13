@@ -10,6 +10,12 @@
 
 Start the backend through `/www/wwwroot/vvv-back-end/current/app.jar`. A release is immutable after `current` switches to it.
 
+The deploy uploads `app.jar` and the `db/` migration directory to `/tmp`, then calls
+`/usr/local/sbin/v1rtual-deploy-backend <git-sha>`. That script applies pending migrations from
+`db/` **before** switching `current`, so structure always moves ahead of code; a failed migration
+aborts the release with the previous version still serving. Migration connection parameters are read
+from `/etc/v1rtual/application-prod.yml`, so no database credential is needed in CI.
+
 ## Server Accounts
 
 Use the existing `www` service account for the backend process and a constrained `deploy` account for CI SSH. Let `deploy` run only this command through sudo:

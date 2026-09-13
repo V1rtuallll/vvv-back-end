@@ -16,7 +16,7 @@ public class VvvBackendApplication {
 
 	}
 
-	// 提供PasswordEncoder～BCrypt最安全最常用
+	// BCryptPasswordEncoder：BCrypt 是最常用的密码哈希算法
 	@Bean
 	public PasswordEncoder passwordEncoder() {
 		return new BCryptPasswordEncoder();

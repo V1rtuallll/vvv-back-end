@@ -56,7 +56,7 @@ public interface UserMapper {
   User findById(Long id);
 
   /**
-   * 批量根据用户ID查询公开信息～像一扇银门，轻轻推开就能看见TA的月光脸蛋和名字❤️
+   * 按用户 ID 批量查询公开信息
    * 只选需要的字段：id, username, avatar
    * 
    * @param ids 用户ID列表（可空，返回空列表）

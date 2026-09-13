@@ -62,7 +62,7 @@ public class AdminHomeConfigService {
 
     config.setPinnedBlogId(vo.getPinnedBlogId());
     homeConfigMapper.saveOrUpdate(config);
-    return Result.success("保存成功～");
+    return Result.success("保存成功");
   }
 
   public Result<Map<String, Object>> get() {
@@ -104,7 +104,7 @@ public class AdminHomeConfigService {
         "image", filesOrEmpty(photoMapper.selectAllSrcs()));
     result.put("availableFilesByType", availableFilesByType);
     result.put("availableFiles", availableFilesByType.getOrDefault(normalizeMainType(mainType), List.of()));
-    return Result.success(result, "Home 配置加载成功～");
+    return Result.success(result, "Home 配置加载成功");
   }
 
   private String normalizeMainType(String mainType) {

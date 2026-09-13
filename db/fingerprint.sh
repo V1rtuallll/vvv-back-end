@@ -37,9 +37,15 @@ fi
 
 mysql_db() { mysql "${CONN_ARGS[@]}" --batch --skip-column-names "$DB_NAME" "$@"; }
 
+TABLES_SQL="
+SELECT CONCAT_WS('|', TABLE_NAME, ENGINE, TABLE_COLLATION)
+FROM information_schema.TABLES
+WHERE TABLE_SCHEMA = DATABASE()
+ORDER BY TABLE_NAME;"
+
 COLUMNS_SQL="
 SELECT CONCAT_WS('|', TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE,
-                 IFNULL(COLUMN_DEFAULT, '<null>'), COLUMN_KEY)
+                 IFNULL(COLUMN_DEFAULT, '<null>'), COLUMN_KEY, IFNULL(COLLATION_NAME, '<none>'))
 FROM information_schema.COLUMNS
 WHERE TABLE_SCHEMA = DATABASE()
 ORDER BY TABLE_NAME, COLUMN_NAME;"
@@ -74,6 +80,8 @@ sort_sections() { LC_ALL=C sort; }
 
 NORMALIZED="$(
   {
+    echo "# tables"
+    mysql_db -e "$TABLES_SQL" | normalize | sort_sections
     echo "# columns"
     mysql_db -e "$COLUMNS_SQL" | normalize | sort_sections
     echo "# indexes"

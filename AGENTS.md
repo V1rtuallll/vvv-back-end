@@ -113,7 +113,11 @@ src/main/java/com/v1rtual/vvv_backend/
   原因是 HikariCP 连接池是惰性的，`contextLoads()` 从头到尾没请求过连接。
   但请注意：**一旦某个测试真的碰数据库，它就会失败** —— 那时需要给测试单独准备数据源，
   不要假设本地 MySQL 一定在跑
-- `src/test/resources/` 不存在，测试会加载主 `application.yml`。加新测试时留意这一点
+- **`src/test/resources/application.yml` 必须存在**，里面全是占位符。它是测试唯一能加载到的配置：
+  真实配置 `src/main/resources/application.yml` 含密钥、被 `.gitignore` 忽略，所以 **CI 的检出里没有它**，
+  缺了测试配置，所有 `@SpringBootTest` 都会报 `Failed to load ApplicationContext`。
+  测试类路径优先于主类路径，因此**本地和 CI 跑的都是这一份** —— 测试不依赖开发者本机设置。
+  改它之前先想清楚 CI 有没有对应的服务
 
 ## 数据库迁移
 

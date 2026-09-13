@@ -10,8 +10,21 @@ import org.apache.ibatis.annotations.Select;
 @Mapper
 public interface AdminMediaMapper {
 
+  /**
+   * 后台资源列表：四种类型合并分页。
+   *
+   * uploader_username 取 user 表的当前用户名，类型表里的同名快照列只在用户行缺失时兜底：
+   * 快照列在用户改名后不会更新。
+   * 外层必须显式列出列名：media 里已经有一列 uploader_username，
+   * SELECT * 会让重名列先映射到快照值。
+   */
   @Select("""
-      SELECT * FROM (
+      SELECT
+        media.id, media.type, media.url, media.filename, media.description, media.alt,
+        media.category, media.thumbnail, media.duration, media.tags, media.is_pinned,
+        media.likes, media.view_count, media.created_at, media.uploader_id,
+        COALESCE(u.username, media.uploader_username) AS uploader_username
+      FROM (
         SELECT id, 'photo' AS type, src AS url, title AS filename, description, alt, category,
                NULL AS thumbnail, NULL AS duration, tags, is_pinned, likes, view_count,
                created_at, uploader_id, uploader_username
@@ -32,7 +45,8 @@ public interface AdminMediaMapper {
                created_at, uploader_id, uploader_username
         FROM music
       ) AS media
-      ORDER BY created_at DESC, type, id DESC
+      LEFT JOIN user u ON media.uploader_id = u.id
+      ORDER BY media.created_at DESC, media.type, media.id DESC
       LIMIT #{offset}, #{limit}
       """)
   List<Map<String, Object>> selectAllPage(@Param("offset") int offset, @Param("limit") int limit);

@@ -1,7 +1,9 @@
 package com.v1rtual.vvv_backend.mapper;
 
 import java.util.List;
+import java.util.Map;
 
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Options;
@@ -23,17 +25,76 @@ public interface CommentMapper {
   @Select("SELECT * FROM comment WHERE id = #{id}")
   Comment selectById(Long id);
 
-  @Select("SELECT * FROM comment " +
-      "WHERE target_type = 'gallery' AND target_id = #{targetId} " +
-      "ORDER BY created_at DESC")
+  /**
+   * 单个画廊的评论列表。
+   *
+   * username 取 user 表的当前用户名，快照列只在用户行缺失时兜底：
+   * comment.username 记录的是评论当时的用户名，用户改名后不会更新。
+   *
+   * 这里显式列出列名而不是 c.*：user 表同样有 username 列，
+   * 通配符会让重名列先映射到快照值，覆盖掉 JOIN 出来的新用户名。
+   */
+  @Select("SELECT c.id, c.content, c.user_id, " +
+      "COALESCE(u.username, c.username) AS username, " +
+      "c.target_type, c.target_id, c.parent_id, c.likes, c.created_at, c.updated_at " +
+      "FROM comment c " +
+      "LEFT JOIN user u ON c.user_id = u.id " +
+      "WHERE c.target_type = 'gallery' AND c.target_id = #{targetId} " +
+      "ORDER BY c.created_at DESC")
   List<Comment> selectGalleryCommentByTargetId(Long targetId);
 
   @Select("SELECT COUNT(*) FROM comment " +
       "WHERE target_type = 'gallery' AND target_id = #{targetId}")
-  int countGallertCommentByTargetId(Long targetId);
+  int countGalleryCommentByTargetId(Long targetId);
 
   /**
-   * 评论点赞数原子+1～安全又温柔
+   * 某个画廊下全部评论的 ID（含各级子评论：回复沿用根评论的 target_id）。
+   */
+  @Select("SELECT id FROM comment WHERE target_type = 'gallery' AND target_id = #{targetId}")
+  List<Long> selectIdsByGalleryId(@Param("targetId") Long targetId);
+
+  /**
+   * 按父评论 ID 批量取子评论 ID，用于逐层递归收集整棵评论树。
+   * parentIds 为空时调用方应跳过，IN () 不是合法 SQL。
+   */
+  @Select({"<script>",
+      "SELECT id FROM comment WHERE parent_id IN ",
+      "<foreach collection='parentIds' item='parentId' open='(' separator=',' close=')'>",
+      "#{parentId}",
+      "</foreach>",
+      "</script>"})
+  List<Long> selectIdsByParentIds(@Param("parentIds") List<Long> parentIds);
+
+  /**
+   * 批量物理删除评论。comment_like 对 comment 没有外键约束，
+   * 调用方必须先删点赞记录再删评论。
+   */
+  @Delete({"<script>",
+      "DELETE FROM comment WHERE id IN ",
+      "<foreach collection='ids' item='id' open='(' separator=',' close=')'>",
+      "#{id}",
+      "</foreach>",
+      "</script>"})
+  int deleteByIds(@Param("ids") List<Long> ids);
+
+  /**
+   * 一次查出多个画廊的评论数，避免列表页逐条 COUNT。
+   *
+   * 返回行的 key 为 targetId / total（Map 结果不参与下划线转驼峰）。
+   * targetIds 为空时调用方应跳过，IN () 不是合法 SQL。
+   */
+  @Select({"<script>",
+      "SELECT target_id AS targetId, COUNT(*) AS total FROM comment ",
+      "WHERE target_type = 'gallery' AND target_id IN ",
+      "<foreach collection='targetIds' item='targetId' open='(' separator=',' close=')'>",
+      "#{targetId}",
+      "</foreach> ",
+      "GROUP BY target_id",
+      "</script>"})
+  List<Map<String, Object>> countGalleryCommentsByTargetIds(@Param("targetIds") List<Long> targetIds);
+
+  /**
+   * 评论点赞数原子 +1。
    */
   @Update("UPDATE comment SET likes = likes + 1 WHERE id = #{commentId}")
   void incrementLikeCount(@Param("commentId") Long commentId);

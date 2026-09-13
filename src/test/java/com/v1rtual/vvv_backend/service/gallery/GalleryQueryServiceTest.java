@@ -1,0 +1,168 @@
+package com.v1rtual.vvv_backend.service.gallery;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.junit.jupiter.api.Test;
+
+import com.v1rtual.vvv_backend.entity.Gallery;
+import com.v1rtual.vvv_backend.entity.ResourceType;
+import com.v1rtual.vvv_backend.mapper.CommentLikeMapper;
+import com.v1rtual.vvv_backend.mapper.CommentMapper;
+import com.v1rtual.vvv_backend.mapper.GalleryLikeMapper;
+import com.v1rtual.vvv_backend.mapper.GalleryMapper;
+import com.v1rtual.vvv_backend.mapper.UserMapper;
+import com.v1rtual.vvv_backend.vo.Result;
+
+class GalleryQueryServiceTest {
+
+  @Test
+  void rejectsPageBelowOne() {
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    GalleryQueryService service = service(galleryMapper, mock(CommentMapper.class));
+
+    for (int page : new int[] {0, -1, -5}) {
+      Result<Map<String, Object>> result = service.list(page, 12, null);
+      assertEquals(400, result.getCode(), "page=" + page + " 应当被拒绝");
+    }
+    verifyNoInteractions(galleryMapper);
+  }
+
+  @Test
+  void rejectsLimitOutsideOneToHundred() {
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    GalleryQueryService service = service(galleryMapper, mock(CommentMapper.class));
+
+    for (int limit : new int[] {0, -1, 101, 100000}) {
+      Result<Map<String, Object>> result = service.list(1, limit, null);
+      assertEquals(400, result.getCode(), "limit=" + limit + " 应当被拒绝");
+    }
+    verifyNoInteractions(galleryMapper);
+  }
+
+  @Test
+  void acceptsTheBoundaryValues() {
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    when(galleryMapper.selectPage(anyLong(), anyInt(), isNull())).thenReturn(List.of());
+    GalleryQueryService service = service(galleryMapper, mock(CommentMapper.class));
+
+    assertEquals(200, service.list(1, 1, null).getCode());
+    assertEquals(200, service.list(1, 100, null).getCode());
+  }
+
+  @Test
+  void rejectsResourceTypeOutsideTheWhitelist() {
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    GalleryQueryService service = service(galleryMapper, mock(CommentMapper.class));
+
+    for (String type : new String[] {"pdf", "image", "gallery", "video' OR 1=1"}) {
+      Result<Map<String, Object>> result = service.list(1, 12, type);
+      assertEquals(400, result.getCode(), "type=" + type + " 应当被拒绝");
+    }
+    verifyNoInteractions(galleryMapper);
+  }
+
+  @Test
+  void passesWhitelistedTypeThroughAndTreatsBlankAsNoFilter() {
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    when(galleryMapper.selectPage(anyLong(), anyInt(), isNull())).thenReturn(List.of());
+    when(galleryMapper.selectPage(anyLong(), anyInt(), eq("photo"))).thenReturn(List.of());
+    when(galleryMapper.selectPage(anyLong(), anyInt(), eq("video"))).thenReturn(List.of());
+    GalleryQueryService service = service(galleryMapper, mock(CommentMapper.class));
+
+    assertEquals(200, service.list(1, 12, "photo").getCode());
+    assertEquals(200, service.list(1, 12, " Photo ").getCode());
+    assertEquals(200, service.list(1, 12, "video").getCode());
+    assertEquals(200, service.list(1, 12, "").getCode());
+    assertEquals(200, service.list(1, 12, "all").getCode());
+
+    verify(galleryMapper, times(2)).selectPage(anyLong(), anyInt(), eq("photo"));
+    verify(galleryMapper, times(2)).selectPage(anyLong(), anyInt(), isNull());
+  }
+
+  @Test
+  void computesOffsetAsLongSoHugePagesDoNotOverflowIntoNegatives() {
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    when(galleryMapper.selectPage(anyLong(), anyInt(), isNull())).thenReturn(List.of());
+    GalleryQueryService service = service(galleryMapper, mock(CommentMapper.class));
+
+    service.list(Integer.MAX_VALUE, 100, null);
+
+    long expectedOffset = (long) (Integer.MAX_VALUE - 1) * 100;
+    verify(galleryMapper).selectPage(expectedOffset, 100, null);
+  }
+
+  /**
+   * 整页评论数只允许一次聚合查询，且每个画廊拿到自己的计数。
+   */
+  @Test
+  void countsCommentsForTheWholePageInASingleQuery() {
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    List<Gallery> page = new ArrayList<>();
+    for (long id = 1; id <= 12; id++) {
+      page.add(Gallery.builder().id(id).type(ResourceType.photo).userId(null).build());
+    }
+    when(galleryMapper.selectPage(0L, 12, null)).thenReturn(page);
+    CommentMapper commentMapper = mock(CommentMapper.class);
+    when(commentMapper.countGalleryCommentsByTargetIds(anyList()))
+        .thenReturn(List.of(row(1L, 3L), row(4L, 7L)));
+    GalleryQueryService service = service(galleryMapper, commentMapper);
+
+    Result<Map<String, Object>> result = service.list(1, 12, null);
+
+    assertEquals(200, result.getCode());
+    @SuppressWarnings("unchecked")
+    List<Map<String, Object>> items = (List<Map<String, Object>>) result.getData().get("list");
+    assertEquals(12, items.size());
+    assertEquals(3L, items.get(0).get("commentCount"));
+    assertEquals(0L, items.get(1).get("commentCount"));
+    assertEquals(7L, items.get(3).get("commentCount"));
+
+    List<Long> queriedIds = new ArrayList<>();
+    for (long id = 1; id <= 12; id++) {
+      queriedIds.add(id);
+    }
+    verify(commentMapper, times(1)).countGalleryCommentsByTargetIds(queriedIds);
+    verify(commentMapper, never()).countGalleryCommentByTargetId(anyLong());
+  }
+
+  @Test
+  void skipsTheCommentQueryWhenThePageIsEmpty() {
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    when(galleryMapper.selectPage(60L, 12, null)).thenReturn(List.of());
+    CommentMapper commentMapper = mock(CommentMapper.class);
+    GalleryQueryService service = service(galleryMapper, commentMapper);
+
+    Result<Map<String, Object>> result = service.list(6, 12, null);
+
+    assertEquals(200, result.getCode());
+    verifyNoInteractions(commentMapper);
+  }
+
+  private GalleryQueryService service(GalleryMapper galleryMapper, CommentMapper commentMapper) {
+    return new GalleryQueryService(galleryMapper, commentMapper, mock(UserMapper.class),
+        mock(CommentLikeMapper.class), mock(GalleryLikeMapper.class));
+  }
+
+  private Map<String, Object> row(Long targetId, Long total) {
+    Map<String, Object> row = new HashMap<>();
+    row.put("targetId", targetId);
+    row.put("total", total);
+    return row;
+  }
+}

@@ -43,25 +43,28 @@ public interface MusicMapper {
     })
     List<String> selectExistSrcs(@Param("srcList") List<String> srcList);
 
+    // uploader_username 取 user 表的当前用户名，快照列只在用户行缺失时兜底：
+    // 快照列在用户改名后不会更新。列名必须全部限定，避免与 user 表同名列冲突。
     @Select("""
             SELECT
-                id,
+                m.id,
                 'music' AS type,
-                src AS url,
-                title AS filename,
-                description,
-                cover_image,
-                duration,
-                artist,
-                album,
-                tags,
-                is_pinned,
-                view_count,
-                created_at,
-                uploader_id,
-                uploader_username
-            FROM music
-            ORDER BY created_at DESC
+                m.src AS url,
+                m.title AS filename,
+                m.description,
+                m.cover_image,
+                m.duration,
+                m.artist,
+                m.album,
+                m.tags,
+                m.is_pinned,
+                m.view_count,
+                m.created_at,
+                m.uploader_id,
+                COALESCE(u.username, m.uploader_username) AS uploader_username
+            FROM music m
+            LEFT JOIN user u ON m.uploader_id = u.id
+            ORDER BY m.created_at DESC
             LIMIT #{offset}, #{limit}
             """)
     List<Map<String, Object>> selectPage(@Param("offset") int offset, @Param("limit") int limit);
@@ -77,6 +80,10 @@ public interface MusicMapper {
             "updated_at = NOW() " +
             "WHERE id = #{id}")
     int updateById(Music music);
+
+    // 删除类型表行。gallery 与类型表以 src 关联，删除 Gallery 时按 src 同步清理
+    @Delete("DELETE FROM music WHERE src = #{src}")
+    int deleteBySrc(String src);
 
     @Select("SELECT id, title, description, src, cover_image, duration, " +
             "artist, album, tags, is_pinned, view_count, " +

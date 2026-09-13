@@ -18,7 +18,7 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-      - name: Build executable JAR
+      - name: Run tests and build executable JAR
         run: |
           chmod +x mvnw
-          ./mvnw -B clean package -DskipTests
+          ./mvnw -B clean package

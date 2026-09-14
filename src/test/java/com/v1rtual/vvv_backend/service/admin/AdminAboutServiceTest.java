@@ -2,14 +2,18 @@ package com.v1rtual.vvv_backend.service.admin;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.v1rtual.vvv_backend.entity.AboutPage;
 import com.v1rtual.vvv_backend.mapper.AboutPageMapper;
@@ -74,6 +78,23 @@ class AdminAboutServiceTest {
 
     assertEquals("[]", page.getLinksJson());
     assertEquals("[]", page.getTagsJson());
+  }
+
+  /** 序列化失败必须报错并中止写入：否则配置被清空、接口却回成功 */
+  @Test
+  void reportsErrorAndSkipsWriteWhenSerializationFails() throws Exception {
+    mapper = mock(AboutPageMapper.class);
+    ObjectMapper broken = mock(ObjectMapper.class);
+    when(broken.writeValueAsString(any())).thenThrow(new JsonProcessingException("序列化失败") {});
+    service = new AdminAboutService(mapper, broken);
+    AboutSaveVO vo = new AboutSaveVO();
+    vo.setLinks(List.of(new AboutLinkVO()));
+
+    Result<Void> result = service.save(vo);
+
+    assertEquals(500, result.getCode());
+    assertEquals("配置序列化失败", result.getMsg());
+    verifyNoInteractions(mapper);
   }
 
   @Test

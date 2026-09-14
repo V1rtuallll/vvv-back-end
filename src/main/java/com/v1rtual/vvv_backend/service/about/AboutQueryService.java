@@ -37,8 +37,8 @@ public class AboutQueryService {
         .displayName(StringUtils.defaultString(page.getDisplayName()))
         .tagline(StringUtils.defaultString(page.getTagline()))
         .bioHtml(StringUtils.defaultString(page.getBioHtml()))
-        .links(parseLinks(page.getLinksJson()))
-        .tags(parseTags(page.getTagsJson()))
+        .links(parseList(page.getLinksJson(), new TypeReference<List<AboutLinkVO>>() {}, "链接"))
+        .tags(parseList(page.getTagsJson(), new TypeReference<List<String>>() {}, "标签"))
         .build(), "About 内容加载成功");
   }
 
@@ -54,25 +54,16 @@ public class AboutQueryService {
   }
 
   /**
-   * JSON 损坏时返回空列表而不是抛异常：这是展示数据，
+   * JSON 缺失或损坏时返回空列表而不是抛异常：这是展示数据，
    * 坏一份不该让整个页面 500（与 HomeQueryService.parseGalleryItems 同一处理方式）。
+   * label 只用于日志区分字段。
    */
-  private List<AboutLinkVO> parseLinks(String json) {
+  private <T> List<T> parseList(String json, TypeReference<List<T>> type, String label) {
     if (StringUtils.isBlank(json)) return new ArrayList<>();
     try {
-      return objectMapper.readValue(json, new TypeReference<>() {});
+      return objectMapper.readValue(json, type);
     } catch (Exception e) {
-      log.error("About 链接 JSON 解析失败", e);
-      return new ArrayList<>();
-    }
-  }
-
-  private List<String> parseTags(String json) {
-    if (StringUtils.isBlank(json)) return new ArrayList<>();
-    try {
-      return objectMapper.readValue(json, new TypeReference<>() {});
-    } catch (Exception e) {
-      log.error("About 标签 JSON 解析失败", e);
+      log.error("About {} JSON 解析失败", label, e);
       return new ArrayList<>();
     }
   }

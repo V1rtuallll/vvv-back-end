@@ -4,6 +4,7 @@ import java.util.List;
 
 import org.springframework.stereotype.Service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.v1rtual.vvv_backend.entity.AboutPage;
 import com.v1rtual.vvv_backend.mapper.AboutPageMapper;
@@ -28,21 +29,29 @@ public class AdminAboutService {
     page.setDisplayName(vo.getDisplayName());
     page.setTagline(vo.getTagline());
     page.setBioHtml(vo.getBioHtml());
-    page.setLinksJson(toJson(vo.getLinks()));
-    page.setTagsJson(toJson(vo.getTags()));
+
+    String linksJson;
+    String tagsJson;
+    try {
+      linksJson = toJson(vo.getLinks());
+      tagsJson = toJson(vo.getTags());
+    } catch (JsonProcessingException e) {
+      log.error("About 配置序列化失败", e);
+      return Result.error(500, "配置序列化失败");
+    }
+    page.setLinksJson(linksJson);
+    page.setTagsJson(tagsJson);
 
     aboutPageMapper.saveOrUpdate(page);
     return Result.success("保存成功");
   }
 
-  /** 列表为空或序列化失败时写 "[]"：库里始终保持合法 JSON */
-  private <T> String toJson(List<T> values) {
+  /**
+   * 列表为空时写 "[]"：库里始终保持合法 JSON。
+   * 序列化失败向上抛出，由 save 转为错误响应，避免把配置清空后仍报成功。
+   */
+  private <T> String toJson(List<T> values) throws JsonProcessingException {
     if (values == null || values.isEmpty()) return "[]";
-    try {
-      return objectMapper.writeValueAsString(values);
-    } catch (Exception e) {
-      log.error("About 配置序列化失败", e);
-      return "[]";
-    }
+    return objectMapper.writeValueAsString(values);
   }
 }

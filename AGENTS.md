@@ -150,7 +150,9 @@ MYSQL_PWD=<密码> db/fingerprint.sh
 ```
 
 **回滚**要把旧 revision 的 jar 与当前的 `db/` 一起放到 `/tmp`（迁移是幂等的，
-已执行的会跳过；回滚代码不回滚结构，这是刻意的）：
+已执行的会跳过；回滚代码不回滚结构，这是刻意的）。
+**例外是破坏性迁移**（当前是删列的 `V004`）：回滚到它之前的代码前，必须先手动把结构补回来，
+`db/README.md` 记了这次例外与恢复用的 SQL：
 
 ```bash
 scp app.jar <生产主机>:/tmp/v1rtual-backend-<旧revision>.jar

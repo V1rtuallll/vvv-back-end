@@ -63,8 +63,29 @@ class AdminAboutServiceTest {
 
     AboutPage page = captureSaved(vo);
 
-    assertEquals("[{\"name\":\"GitHub\",\"url\":\"https://github.com/x\"}]", page.getLinksJson());
+    assertEquals("[{\"name\":\"GitHub\",\"url\":\"https://github.com/x\",\"icon\":null}]", page.getLinksJson());
     assertEquals("[\"Vue\",\"Java\"]", page.getTagsJson());
+  }
+
+  @Test
+  void serializesTheOptionalLinkIcon() {
+    AboutLinkVO withIcon = new AboutLinkVO();
+    withIcon.setName("GitHub");
+    withIcon.setUrl("https://github.com/x");
+    withIcon.setIcon("/stickers/heart2.gif");
+    AboutLinkVO withoutIcon = new AboutLinkVO();
+    withoutIcon.setName("邮箱");
+    withoutIcon.setUrl("mailto:me@example.test");
+
+    AboutSaveVO vo = new AboutSaveVO();
+    vo.setLinks(List.of(withIcon, withoutIcon));
+
+    AboutPage page = captureSaved(vo);
+
+    assertEquals(
+        "[{\"name\":\"GitHub\",\"url\":\"https://github.com/x\",\"icon\":\"/stickers/heart2.gif\"},"
+            + "{\"name\":\"邮箱\",\"url\":\"mailto:me@example.test\",\"icon\":null}]",
+        page.getLinksJson());
   }
 
   /** 库里保持合法 JSON，读取端就不用额外判空 */

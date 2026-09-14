@@ -7,4 +7,6 @@ import lombok.Data;
 public class AboutLinkVO {
   private String name;
   private String url;
+  /** 可选图标地址。为空时前端只显示文字 */
+  private String icon;
 }

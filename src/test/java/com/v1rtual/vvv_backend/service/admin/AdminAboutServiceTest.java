@@ -42,16 +42,12 @@ class AdminAboutServiceTest {
   @Test
   void writesEveryEditableFieldOntoRowOne() {
     AboutSaveVO vo = new AboutSaveVO();
-    vo.setAvatarSrc("/a.png");
-    vo.setDisplayName("V1rtual");
     vo.setTagline("签名");
     vo.setBioHtml("<p>正文</p>");
 
     AboutPage page = captureSaved(vo);
 
     assertEquals(1L, page.getId());
-    assertEquals("/a.png", page.getAvatarSrc());
-    assertEquals("V1rtual", page.getDisplayName());
     assertEquals("签名", page.getTagline());
     assertEquals("<p>正文</p>", page.getBioHtml());
   }

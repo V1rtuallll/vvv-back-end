@@ -6,8 +6,6 @@ import lombok.Data;
 
 @Data
 public class AboutSaveVO {
-  private String avatarSrc;
-  private String displayName;
   private String tagline;
   private String bioHtml;
   private List<AboutLinkVO> links;

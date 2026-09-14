@@ -47,7 +47,7 @@ class AboutPageMapperContractTest {
   void everyNullableTextColumnHasAnExplicitNullBranch() throws NoSuchMethodException {
     String sql = insertSql();
 
-    for (String field : new String[] { "avatarSrc", "displayName", "tagline", "bioHtml" }) {
+    for (String field : new String[] { "tagline", "bioHtml" }) {
       assertTrue(sql.contains("#{" + field + "}"), "缺少 " + field + " 的参数写入：" + sql);
       assertTrue(sql.contains("test='" + field + " == null'"),
           field + " 缺少显式的 NULL 分支，该字段为空时会拼出缺占位符的语句导致保存失败：" + sql);

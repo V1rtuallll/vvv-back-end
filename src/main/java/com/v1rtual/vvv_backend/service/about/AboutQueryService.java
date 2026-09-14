@@ -10,6 +10,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.v1rtual.vvv_backend.entity.AboutPage;
 import com.v1rtual.vvv_backend.mapper.AboutPageMapper;
+import com.v1rtual.vvv_backend.service.user.SiteOwnerProfile;
 import com.v1rtual.vvv_backend.vo.AboutLinkVO;
 import com.v1rtual.vvv_backend.vo.AboutVO;
 import com.v1rtual.vvv_backend.vo.Result;
@@ -25,32 +26,25 @@ public class AboutQueryService {
 
   private final AboutPageMapper aboutPageMapper;
   private final ObjectMapper objectMapper;
+  private final SiteOwnerProfile siteOwnerProfile;
 
   public Result<AboutVO> get() {
     AboutPage page = aboutPageMapper.getAboutPage();
     if (page == null) {
-      return Result.success(emptyVo(), "About 内容加载成功");
+      page = new AboutPage();
     }
+    SiteOwnerProfile.Identity identity = siteOwnerProfile.identity();
 
     return Result.success(AboutVO.builder()
-        .avatarSrc(StringUtils.defaultString(page.getAvatarSrc()))
-        .displayName(StringUtils.defaultString(page.getDisplayName()))
+        .avatarSrc(identity.avatar())
+        .displayName(identity.username())
         .tagline(StringUtils.defaultString(page.getTagline()))
         .bioHtml(StringUtils.defaultString(page.getBioHtml()))
-        .links(parseList(page.getLinksJson(), new TypeReference<List<AboutLinkVO>>() {}, "链接"))
-        .tags(parseList(page.getTagsJson(), new TypeReference<List<String>>() {}, "标签"))
+        .links(parseList(page.getLinksJson(), new TypeReference<List<AboutLinkVO>>() {
+        }, "链接"))
+        .tags(parseList(page.getTagsJson(), new TypeReference<List<String>>() {
+        }, "标签"))
         .build(), "About 内容加载成功");
-  }
-
-  private AboutVO emptyVo() {
-    return AboutVO.builder()
-        .avatarSrc("")
-        .displayName("")
-        .tagline("")
-        .bioHtml("")
-        .links(new ArrayList<>())
-        .tags(new ArrayList<>())
-        .build();
   }
 
   /**

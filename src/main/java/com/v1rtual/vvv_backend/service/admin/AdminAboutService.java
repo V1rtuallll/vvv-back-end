@@ -25,8 +25,6 @@ public class AdminAboutService {
   public Result<Void> save(AboutSaveVO vo) {
     AboutPage page = new AboutPage();
     page.setId(1L);
-    page.setAvatarSrc(vo.getAvatarSrc());
-    page.setDisplayName(vo.getDisplayName());
     page.setTagline(vo.getTagline());
     page.setBioHtml(vo.getBioHtml());
 

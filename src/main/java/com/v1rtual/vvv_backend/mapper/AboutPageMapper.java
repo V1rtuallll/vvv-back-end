@@ -21,10 +21,8 @@ public interface AboutPageMapper {
    */
   @Insert({
       "<script>",
-      "REPLACE INTO about_page (id, avatar_src, display_name, tagline, bio_html, links_json, tags_json) ",
+      "REPLACE INTO about_page (id, tagline, bio_html, links_json, tags_json) ",
       "VALUES (1, ",
-      "<if test='avatarSrc != null'>#{avatarSrc}</if><if test='avatarSrc == null'>NULL</if>, ",
-      "<if test='displayName != null'>#{displayName}</if><if test='displayName == null'>NULL</if>, ",
       "<if test='tagline != null'>#{tagline}</if><if test='tagline == null'>NULL</if>, ",
       "<if test='bioHtml != null'>#{bioHtml}</if><if test='bioHtml == null'>NULL</if>, ",
       "<if test='linksJson != null'>#{linksJson}</if><if test='linksJson == null'>'[]'</if>, ",

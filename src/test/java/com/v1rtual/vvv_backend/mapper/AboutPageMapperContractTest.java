@@ -17,8 +17,9 @@ import com.v1rtual.vvv_backend.entity.AboutPage;
  * 单行表（id = 1）：读取必须锁定这一行，写入必须是 REPLACE INTO ——
  * 用普通 INSERT 会在第二次保存时撞主键。
  *
- * 每个可空字段都要有显式的 NULL 分支：REPLACE INTO 的列清单里少写一个 NULL 分支，
- * 用户清空该字段时旧值会留在库里，界面上显示的和刚保存的不一致。
+ * 每个可空字段都要有显式的 NULL 分支：REPLACE INTO 的列清单里少写一个分支，
+ * 拼出来的就是 (值, , 值) 这种缺占位符的语句，整个保存直接语法报错失败，
+ * 不会退回成保留旧值。
  */
 class AboutPageMapperContractTest {
 
@@ -49,7 +50,7 @@ class AboutPageMapperContractTest {
     for (String field : new String[] { "avatarSrc", "displayName", "tagline", "bioHtml" }) {
       assertTrue(sql.contains("#{" + field + "}"), "缺少 " + field + " 的参数写入：" + sql);
       assertTrue(sql.contains("test='" + field + " == null'"),
-          field + " 缺少显式的 NULL 分支，清空该字段时旧值会留在库里：" + sql);
+          field + " 缺少显式的 NULL 分支，该字段为空时会拼出缺占位符的语句导致保存失败：" + sql);
     }
   }
 

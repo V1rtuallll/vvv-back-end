@@ -15,8 +15,9 @@ public interface AboutPageMapper {
   /**
    * 保存或更新（强制 id = 1）。与 HomeConfigMapper.saveOrUpdate 同一套写法。
    *
-   * 每个可空字段都要有显式的 NULL 分支 —— REPLACE INTO 的列清单里少了 NULL，
-   * 用户清空某个字段时旧值会留在库里。
+   * 每个可空字段都要有显式的 NULL 分支 —— REPLACE INTO 的列清单里少一个分支，
+   * 拼出来的就是 (值, , 值) 这种缺占位符的语句，整个保存直接语法报错失败，
+   * 不会退回成保留旧值。
    */
   @Insert({
       "<script>",

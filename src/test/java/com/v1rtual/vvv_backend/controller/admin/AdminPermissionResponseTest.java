@@ -17,8 +17,10 @@ import org.springframework.web.multipart.MultipartFile;
 import com.v1rtual.vvv_backend.security.CurrentUserProvider;
 import com.v1rtual.vvv_backend.security.OwnerAccess;
 import com.v1rtual.vvv_backend.service.ResourceSyncService;
+import com.v1rtual.vvv_backend.service.admin.AdminAboutService;
 import com.v1rtual.vvv_backend.service.admin.AdminHomeConfigService;
 import com.v1rtual.vvv_backend.service.admin.AdminMediaService;
+import com.v1rtual.vvv_backend.vo.AboutSaveVO;
 import com.v1rtual.vvv_backend.vo.HomeConfigSaveVO;
 import com.v1rtual.vvv_backend.vo.PageResultVO;
 import com.v1rtual.vvv_backend.vo.Result;
@@ -38,6 +40,7 @@ class AdminPermissionResponseTest {
   private final CurrentUserProvider currentUserProvider = mock(CurrentUserProvider.class);
   private final AdminMediaService mediaService = mock(AdminMediaService.class);
   private final AdminHomeConfigService homeConfigService = mock(AdminHomeConfigService.class);
+  private final AdminAboutService aboutService = mock(AdminAboutService.class);
   private final ResourceSyncService resourceSyncService = mock(ResourceSyncService.class);
 
   private void denyAccess() {
@@ -106,6 +109,19 @@ class AdminPermissionResponseTest {
     assertEquals(DENIED_MESSAGE, result.getMsg());
     assertNull(result.getData());
     verifyNoInteractions(homeConfigService);
+  }
+
+  @Test
+  void aboutSaveIsForbiddenForANonOwner() {
+    denyAccess();
+    AdminAboutController controller = new AdminAboutController(ownerAccess, aboutService);
+
+    Result<Void> result = controller.save(mock(AboutSaveVO.class));
+
+    assertEquals(403, result.getCode());
+    assertEquals(DENIED_MESSAGE, result.getMsg());
+    assertNull(result.getData());
+    verifyNoInteractions(aboutService);
   }
 
   @Test

@@ -22,6 +22,7 @@ class AdminRouteMappingTest {
     assertMapped("/api/admin/upload-resource", RequestMethod.POST);
     assertMapped("/api/admin/home/config", RequestMethod.GET);
     assertMapped("/api/admin/home/config", RequestMethod.POST);
+    assertMapped("/api/admin/about", RequestMethod.POST);
     assertMapped("/api/admin/resources", RequestMethod.GET);
     assertMapped("/api/admin/resource/update", RequestMethod.POST);
   }

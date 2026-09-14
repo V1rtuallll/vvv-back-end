@@ -114,6 +114,31 @@ db/migrate.sh    # 补齐快照之后新增的迁移
 回滚代码时把当前的 `db/` 一并 staging 过去即可：迁移是幂等的，已执行的会跳过；
 **回滚代码不回滚结构**，这是刻意的。
 
+### ⚠️ 破坏性迁移：上面那套回滚不成立
+
+「回滚代码不回滚结构」之所以安全，是因为迁移一直是**只增不减**的：旧代码不会引用新增的列，
+所以拿旧 JAR 配新结构照样能跑。
+
+**`V004` 打破了这条前提 —— 它删列。** 从 `V004` 起，回滚规则变成：
+
+> 回滚到 `V004` **之前**的代码时，那版代码引用的列已经不存在了。
+> 具体到 `V004`：`about_page` 的 `avatar_src` / `display_name` 被删掉，
+> 旧版 `AboutPageMapper` 的 `REPLACE INTO` 点名了它们 —— 后台保存 About 配置会直接报
+> 「未知列」（1054），读路径则是身份区显示成空。
+
+同一个道理也在**发布窗口**里成立：发布脚本是「跑迁移 → 切 `current` → 重启」，
+切之前旧 JAR 还在服务，那几秒内如果有人保存 About 配置同样会 500（数据不会坏，那次写入根本没执行）。
+
+要真正回滚到 `V004` 之前的版本，得先手动把两列加回来：
+
+```sql
+ALTER TABLE `about_page`
+  ADD COLUMN `avatar_src` varchar(512) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '头像URL' AFTER `id`,
+  ADD COLUMN `display_name` varchar(100) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '昵称' AFTER `avatar_src`;
+```
+
+**新增破坏性迁移时，请照这个格式把影响写清楚**，别只写「删了某列」。
+
 ## 已执行的迁移
 
 | 版本 | 内容 | 本机开发库 | 生产库 |

@@ -35,7 +35,17 @@ public class SecurityConfig {
             // 不放行的话，任何产生错误页的请求（404、参数类型不匹配等）都会被拦成 403 空响应体。
             .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
             .requestMatchers("/api/home/**", "/api/user/count", "/api/auth/**", "/api/user/info/{username}",
-                "/api/gallery/list", "/api/gallery/comments/**", "/api/about", "/mobile-blocked.html")
+                "/api/gallery/list", "/api/gallery/comments/**", "/api/about",
+                // 博客的公开读路径。新建/更新/删除文章、上传、发评论、点赞都是独立路径，
+                // 不在这里，落在 anyRequest().authenticated() 之下。
+                // 注意 /api/blog/comments/** 同时覆盖了 DELETE /api/blog/comments/{id}——
+                // 与 gallery 的 /api/gallery/comments/** 形状一致，那个写操作的鉴权由
+                // BlogInteractionService.deleteComment 自己的 401 判定负责。
+                "/api/blog/list",
+                "/api/blog/latest",
+                "/api/blog/detail/**",
+                "/api/blog/comments/**",
+                "/mobile-blocked.html")
             .permitAll() // 放行
             // .requestMatchers("/api/user/count").permitAll() // 统计用户数放行
             // .requestMatchers("/api/user/info/{username}").permitAll() // 用户信息放行

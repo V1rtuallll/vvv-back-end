@@ -130,4 +130,14 @@ public interface CommentMapper {
    */
   @Select("SELECT id FROM comment WHERE target_type = 'blog' AND target_id = #{targetId}")
   List<Long> selectIdsByBlogId(@Param("targetId") Long targetId);
+
+  /**
+   * 新增一条博客评论。
+   * target_type 固定为 'blog'，不接受调用方传入 —— 与 gallery 版同样的理由。
+   */
+  @Insert("INSERT INTO comment " +
+      "(content, user_id, username, target_type, target_id, parent_id, created_at) " +
+      "VALUES (#{content}, #{userId}, #{username}, 'blog', #{targetId}, #{parentId}, NOW())")
+  @Options(useGeneratedKeys = true, keyProperty = "id")
+  int insertBlogComment(Comment comment);
 }

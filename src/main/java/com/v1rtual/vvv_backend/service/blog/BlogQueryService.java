@@ -1,0 +1,128 @@
+package com.v1rtual.vvv_backend.service.blog;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import org.springframework.stereotype.Service;
+
+import com.v1rtual.vvv_backend.entity.Comment;
+import com.v1rtual.vvv_backend.entity.User;
+import com.v1rtual.vvv_backend.mapper.BlogMapper;
+import com.v1rtual.vvv_backend.mapper.CommentMapper;
+import com.v1rtual.vvv_backend.security.OwnerAccess;
+import com.v1rtual.vvv_backend.service.PageParams;
+import com.v1rtual.vvv_backend.vo.BlogDetailVO;
+import com.v1rtual.vvv_backend.vo.BlogLatestVO;
+import com.v1rtual.vvv_backend.vo.BlogSummaryVO;
+import com.v1rtual.vvv_backend.vo.BlogWithAuthorVO;
+import com.v1rtual.vvv_backend.vo.PageResultVO;
+import com.v1rtual.vvv_backend.vo.Result;
+
+import lombok.RequiredArgsConstructor;
+
+/**
+ * 博客的读路径。
+ *
+ * 公开列表与右栏只下发摘要，正文永不出现在列表响应里 —— 正文是 longtext，
+ * 五条就可能是几十 KB，而右栏在全局布局上、每个页面都会请求。
+ */
+@Service
+@RequiredArgsConstructor
+public class BlogQueryService {
+
+  /** 右栏默认条数（spec：最新 5 条）。 */
+  public static final int LATEST_DEFAULT = 5;
+  /** 右栏条数上限。公开接口，必须封顶。 */
+  public static final int LATEST_MAX = 20;
+
+  private final BlogMapper blogMapper;
+  private final CommentMapper commentMapper;
+  private final OwnerAccess ownerAccess;
+
+  public Result<PageResultVO<BlogSummaryVO>> list(int page, int limit) {
+    if (!PageParams.isValid(page, limit)) return Result.error(400, "分页参数不合法");
+
+    int offset = PageParams.clampToInt(PageParams.offset(page, limit));
+    List<BlogSummaryVO> items = new ArrayList<>();
+    for (BlogWithAuthorVO row : blogMapper.selectPage(offset, limit)) {
+      items.add(toSummary(row));
+    }
+    return Result.success(PageResultVO.<BlogSummaryVO>builder()
+        .list(items)
+        .total(blogMapper.countPublished())
+        .build());
+  }
+
+  public Result<List<BlogLatestVO>> latest(int limit) {
+    int size = limit <= 0 ? LATEST_DEFAULT : Math.min(limit, LATEST_MAX);
+
+    List<BlogLatestVO> items = new ArrayList<>();
+    for (BlogWithAuthorVO row : blogMapper.selectLatest(size)) {
+      items.add(BlogLatestVO.builder()
+          .id(row.getId())
+          .title(row.getTitle())
+          .summary(BlogSummary.from(row.getContent()))
+          .createdAt(row.getCreatedAt())
+          .build());
+    }
+    return Result.success(items);
+  }
+
+  /**
+   * 详情。一次查询同时拿到正文与作者名（两者都在 BlogWithAuthorVO 上）。
+   *
+   * 草稿只对文章作者与站点 owner 可见 —— 这条 SQL 刻意不过滤 status，
+   * 可见性在这里按身份判定。
+   *
+   * views 只在「已发布」时自增，而且**排在读取之后**：这样响应里展示的是打开前的
+   * 数字，不存在多算一次的问题；草稿永不自增，作者反复打开自己的草稿不产生浏览量。
+   */
+  public Result<BlogDetailVO> detail(Long id, User currentUser) {
+    BlogWithAuthorVO row = blogMapper.selectWithAuthorById(id);
+    if (row == null) return Result.error(404, "文章不存在");
+
+    boolean published = row.getStatus() != null && row.getStatus() == 1;
+    if (!published && !canSeeDraft(row.getAuthorId(), currentUser)) {
+      return Result.error(403, OwnerAccess.DENIED_MESSAGE);
+    }
+    if (published) blogMapper.incrementViews(id);
+
+    return Result.success(BlogDetailVO.builder()
+        .id(row.getId())
+        .title(row.getTitle())
+        .content(row.getContent())
+        .coverImage(row.getCoverImage())
+        .authorId(row.getAuthorId())
+        .authorUsername(row.getAuthorUsername())
+        .views(row.getViews())
+        .status(row.getStatus())
+        .commentCount(commentMapper.countBlogCommentByTargetId(id))
+        .createdAt(row.getCreatedAt())
+        .updatedAt(row.getUpdatedAt())
+        .build());
+  }
+
+  public Result<List<Comment>> comments(Long blogId) {
+    return Result.success(commentMapper.selectBlogCommentByTargetId(blogId));
+  }
+
+  /** 作者本人或站点 owner。与 GalleryManageService 的判定口径一致。 */
+  private boolean canSeeDraft(Long authorId, User currentUser) {
+    if (currentUser == null) return false;
+    if (ownerAccess.isOwner(currentUser)) return true;
+    return authorId != null && authorId.equals(currentUser.getId());
+  }
+
+  private BlogSummaryVO toSummary(BlogWithAuthorVO row) {
+    return BlogSummaryVO.builder()
+        .id(row.getId())
+        .title(row.getTitle())
+        .summary(BlogSummary.from(row.getContent()))
+        .coverImage(row.getCoverImage())
+        .authorUsername(row.getAuthorUsername())
+        .views(row.getViews())
+        .commentCount(commentMapper.countBlogCommentByTargetId(row.getId()))
+        .createdAt(row.getCreatedAt())
+        .build();
+  }
+}

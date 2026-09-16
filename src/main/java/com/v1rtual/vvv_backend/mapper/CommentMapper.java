@@ -98,4 +98,30 @@ public interface CommentMapper {
    */
   @Update("UPDATE comment SET likes = likes + 1 WHERE id = #{commentId}")
   void incrementLikeCount(@Param("commentId") Long commentId);
+
+  // ------------------------------------------------------------------
+  // 以下为 blog 版方法，是上面 gallery 版方法的平行副本。
+  //
+  // 现有方法把 target_type 硬编码为 'gallery'，本次刻意不改动它们 ——
+  // 改成参数会动到 gallery 的现有行为，属于无关重构。
+  // ------------------------------------------------------------------
+
+  /**
+   * 单篇博客的评论列表。
+   *
+   * username 取 user 表的当前用户名，快照列只在用户行缺失时兜底 ——
+   * 与 gallery 版同样的原因，同样的写法（显式列名，不用 c.*）。
+   */
+  @Select("SELECT c.id, c.content, c.user_id, " +
+      "COALESCE(u.username, c.username) AS username, " +
+      "c.target_type, c.target_id, c.parent_id, c.likes, c.created_at, c.updated_at " +
+      "FROM comment c " +
+      "LEFT JOIN user u ON c.user_id = u.id " +
+      "WHERE c.target_type = 'blog' AND c.target_id = #{targetId} " +
+      "ORDER BY c.created_at DESC")
+  List<Comment> selectBlogCommentByTargetId(Long targetId);
+
+  @Select("SELECT COUNT(*) FROM comment " +
+      "WHERE target_type = 'blog' AND target_id = #{targetId}")
+  int countBlogCommentByTargetId(Long targetId);
 }

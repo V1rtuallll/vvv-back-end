@@ -1,0 +1,241 @@
+package com.v1rtual.vvv_backend.service.blog;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import java.time.LocalDateTime;
+import java.util.List;
+
+import org.junit.jupiter.api.Test;
+
+import com.v1rtual.vvv_backend.entity.Comment;
+import com.v1rtual.vvv_backend.entity.User;
+import com.v1rtual.vvv_backend.mapper.BlogMapper;
+import com.v1rtual.vvv_backend.mapper.CommentMapper;
+import com.v1rtual.vvv_backend.security.OwnerAccess;
+import com.v1rtual.vvv_backend.vo.BlogDetailVO;
+import com.v1rtual.vvv_backend.vo.BlogLatestVO;
+import com.v1rtual.vvv_backend.vo.BlogSummaryVO;
+import com.v1rtual.vvv_backend.vo.BlogWithAuthorVO;
+import com.v1rtual.vvv_backend.vo.PageResultVO;
+import com.v1rtual.vvv_backend.vo.Result;
+
+class BlogQueryServiceTest {
+
+  private final BlogMapper blogMapper = mock(BlogMapper.class);
+  private final CommentMapper commentMapper = mock(CommentMapper.class);
+  private final OwnerAccess ownerAccess = mock(OwnerAccess.class);
+
+  private BlogQueryService service() {
+    return new BlogQueryService(blogMapper, commentMapper, ownerAccess);
+  }
+
+  private static User user(long id, String username) {
+    User u = new User();
+    u.setId(id);
+    u.setUsername(username);
+    return u;
+  }
+
+  private static BlogWithAuthorVO row(long id, String title, String author, int status) {
+    BlogWithAuthorVO vo = new BlogWithAuthorVO();
+    vo.setId(id);
+    vo.setTitle(title);
+    vo.setContent("# 标题\n\n这是**正文**内容，够长到可以当摘要用。");
+    vo.setAuthorId(9L);
+    vo.setAuthorUsername(author);
+    vo.setCoverImage("https://bucket.example.test/blog/cover.png");
+    vo.setViews(3L);
+    vo.setStatus(status);
+    vo.setCreatedAt(LocalDateTime.of(2026, 9, 16, 12, 0));
+    return vo;
+  }
+
+  // ---------- list ----------
+
+  @Test
+  void listRejectsInvalidPagingInsteadOfQuerying() {
+    assertEquals(400, service().list(0, 10).getCode());
+    assertEquals(400, service().list(1, 0).getCode());
+    assertEquals(400, service().list(1, 101).getCode());
+    verify(blogMapper, never()).selectPage(anyInt(), anyInt());
+  }
+
+  @Test
+  void listReturnsSummaryAndNeverTheBody() {
+    when(blogMapper.selectPage(0, 10)).thenReturn(List.of(row(1L, "第一篇", "V1rtual", 1)));
+    when(blogMapper.countPublished()).thenReturn(1L);
+
+    Result<PageResultVO<BlogSummaryVO>> result = service().list(1, 10);
+
+    assertEquals(200, result.getCode());
+    assertEquals(1L, result.getData().getTotal());
+    BlogSummaryVO item = result.getData().getList().get(0);
+    assertEquals("第一篇", item.getTitle());
+    assertEquals("V1rtual", item.getAuthorUsername());
+    assertEquals("标题 这是正文内容，够长到可以当摘要用。", item.getSummary());
+  }
+
+  @Test
+  void listConvertsPageToOffset() {
+    when(blogMapper.selectPage(20, 10)).thenReturn(List.of());
+    when(blogMapper.countPublished()).thenReturn(0L);
+
+    service().list(3, 10);
+
+    verify(blogMapper).selectPage(20, 10);
+  }
+
+  // ---------- detail ----------
+
+  private static final String BODY = "# 标题\n\n正文";
+
+  private static BlogWithAuthorVO detailRow(long id, long authorId, int status) {
+    BlogWithAuthorVO vo = row(id, "标题", "someone", status);
+    vo.setAuthorId(authorId);
+    vo.setContent(BODY);
+    vo.setViews(5L);
+    return vo;
+  }
+
+  @Test
+  void detailReadsThePostAndTheAuthorNameInOneQuery() {
+    when(blogMapper.selectWithAuthorById(1L)).thenReturn(detailRow(1L, 9L, 1));
+
+    Result<BlogDetailVO> result = service().detail(1L, null);
+
+    assertEquals(200, result.getCode());
+    assertEquals(BODY, result.getData().getContent());
+    assertEquals("someone", result.getData().getAuthorUsername());
+    assertEquals(5L, result.getData().getViews());
+    verify(blogMapper, never()).selectById(anyLong());
+  }
+
+  @Test
+  void detailIncrementsViewsAfterReadingSoTheNumberIsNotDoubleCounted() {
+    when(blogMapper.selectWithAuthorById(1L)).thenReturn(detailRow(1L, 9L, 1));
+
+    Result<BlogDetailVO> result = service().detail(1L, null);
+
+    // 响应里是打开前的数字（5），不是 6 —— 自增留给下一次刷新
+    assertEquals(5L, result.getData().getViews());
+    verify(blogMapper).incrementViews(1L);
+  }
+
+  @Test
+  void detailOnMissingPostReturns404() {
+    when(blogMapper.selectWithAuthorById(404L)).thenReturn(null);
+
+    Result<BlogDetailVO> result = service().detail(404L, null);
+
+    assertEquals(404, result.getCode());
+    assertEquals("文章不存在", result.getMsg());
+    verify(blogMapper, never()).incrementViews(anyLong());
+  }
+
+  @Test
+  void draftIsHiddenFromAnonymousVisitorsAndDoesNotIncrementViews() {
+    when(blogMapper.selectWithAuthorById(1L)).thenReturn(detailRow(1L, 9L, 0));
+
+    Result<BlogDetailVO> result = service().detail(1L, null);
+
+    assertEquals(403, result.getCode());
+    verify(blogMapper, never()).incrementViews(anyLong());
+  }
+
+  @Test
+  void draftIsHiddenFromOtherLoggedInUsers() {
+    when(blogMapper.selectWithAuthorById(1L)).thenReturn(detailRow(1L, 9L, 0));
+
+    Result<BlogDetailVO> result = service().detail(1L, user(77L, "stranger"));
+
+    assertEquals(403, result.getCode());
+    verify(blogMapper, never()).incrementViews(anyLong());
+  }
+
+  @Test
+  void draftIsVisibleToItsAuthorAndStillDoesNotIncrementViews() {
+    when(blogMapper.selectWithAuthorById(1L)).thenReturn(detailRow(1L, 9L, 0));
+
+    Result<BlogDetailVO> result = service().detail(1L, user(9L, "someone"));
+
+    assertEquals(200, result.getCode());
+    assertEquals(BODY, result.getData().getContent());
+    // 作者反复打开自己的草稿不该产生浏览量
+    verify(blogMapper, never()).incrementViews(1L);
+  }
+
+  @Test
+  void draftIsVisibleToTheSiteOwner() {
+    when(blogMapper.selectWithAuthorById(1L)).thenReturn(detailRow(1L, 9L, 0));
+    when(ownerAccess.isOwner(any(User.class))).thenReturn(true);
+
+    Result<BlogDetailVO> result = service().detail(1L, user(77L, "V1rtual"));
+
+    assertEquals(200, result.getCode());
+    verify(blogMapper, never()).incrementViews(1L);
+  }
+
+  @Test
+  void detailCarriesTheCommentCount() {
+    when(blogMapper.selectWithAuthorById(1L)).thenReturn(detailRow(1L, 9L, 1));
+    when(commentMapper.countBlogCommentByTargetId(1L)).thenReturn(4);
+
+    Result<BlogDetailVO> result = service().detail(1L, null);
+
+    assertEquals(4, result.getData().getCommentCount());
+  }
+
+  // ---------- latest ----------
+
+  @Test
+  void latestDefaultsToFiveAndCapsAtTwenty() {
+    when(blogMapper.selectLatest(anyInt())).thenReturn(List.of());
+
+    service().latest(5);
+    verify(blogMapper).selectLatest(5);
+
+    // 每次只看本次调用，selectLatest 的参数在用例内会重复出现
+    clearInvocations(blogMapper);
+    service().latest(999);
+    verify(blogMapper).selectLatest(20);
+
+    clearInvocations(blogMapper);
+    service().latest(0);
+    verify(blogMapper).selectLatest(5);
+  }
+
+  @Test
+  void latestReturnsOnlyTheThreeFieldsTheSidebarNeeds() {
+    when(blogMapper.selectLatest(5)).thenReturn(List.of(row(1L, "标题", "V1rtual", 1)));
+
+    Result<List<BlogLatestVO>> result = service().latest(5);
+
+    BlogLatestVO item = result.getData().get(0);
+    assertEquals(1L, item.getId());
+    assertEquals("标题", item.getTitle());
+    assertEquals("标题 这是正文内容，够长到可以当摘要用。", item.getSummary());
+  }
+
+  // ---------- comments ----------
+
+  @Test
+  void commentsAreDelegatedToTheBlogVariantOfTheMapper() {
+    Comment comment = new Comment();
+    comment.setId(3L);
+    when(commentMapper.selectBlogCommentByTargetId(1L)).thenReturn(List.of(comment));
+
+    Result<List<Comment>> result = service().comments(1L);
+
+    assertEquals(1, result.getData().size());
+    verify(commentMapper, never()).selectGalleryCommentByTargetId(anyLong());
+  }
+
+}

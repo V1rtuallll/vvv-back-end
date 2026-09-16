@@ -174,20 +174,23 @@ public class BlogManageService {
   }
 
   /**
-   * 地址是否位于本站博客目录（{@link OssUtil.FileType#BLOG}）之下。
+   * 地址解析出的对象键是否位于本站博客目录（{@link OssUtil.FileType#BLOG}）之下。
    *
-   * {@link OssUtil#objectKeyOf(String)} 只取 URL 的路径、丢弃主机名：任意地址
-   * （例如 https://other.example/imgs/a.jpg）都会被解析成本 bucket 的对象键。
-   * 因此删除前必须先确认地址落在本功能自己的前缀内。
+   * 判断依据是对象键，不是地址字符串。删除由 {@link OssUtil#deleteByPublicUrl(String)}
+   * 完成，它删掉的键来自 {@link OssUtil#objectKeyOf(String)}：只取路径、丢弃主机名，
+   * 并对路径做百分号解码；规范化本身不做解码。同一个对象键（{@code blog/../imgs/a.jpg}）
+   * 写成字面的 {@code ..} 与写成 {@code %2e%2e} 时，按地址字符串比较会得到相反的结论 ——
+   * 一种写法被拦下、另一种被放行，而两者指向同一个键。折叠不能指望客户端：阿里云 SDK
+   * 关闭了 URI 规范化（setNormalizeUri(false)）。
    *
-   * 比较的是规范化之后的地址：{@code /blog/../imgs/a.jpg} 这类路径会被 HTTP 客户端
-   * 折叠成 {@code /imgs/a.jpg}，按原始字符串比较会漏判。
+   * 因此这里按与删除完全相同的方式先解析出对象键，再对对象键做规范化：
+   * 守卫与删除对「要删的是哪个对象」不会再出现分歧。
    */
   private boolean isOwnCoverUrl(String coverImage) {
-    String prefix = ossUtil.getPublicUrl(OssUtil.FileType.BLOG.getPath());
-    if (!StringUtils.hasText(prefix)) return false;
     try {
-      return URI.create(coverImage).normalize().toString().startsWith(prefix);
+      String key = ossUtil.objectKeyOf(coverImage);
+      String normalized = URI.create(key).normalize().getPath();
+      return normalized != null && normalized.startsWith(OssUtil.FileType.BLOG.getPath());
     } catch (IllegalArgumentException e) {
       return false;
     }

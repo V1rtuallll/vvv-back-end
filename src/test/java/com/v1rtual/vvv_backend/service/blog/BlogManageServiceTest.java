@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -40,7 +41,7 @@ class BlogManageServiceTest {
   private final OssUtil ossUtil = mock(OssUtil.class);
   private final OssCleanupRecordService ossCleanupRecordService = mock(OssCleanupRecordService.class);
 
-  /** 本站 bucket 里博客目录的公开前缀，守卫用它判断封面地址是否属于本功能。 */
+  /** 本站 bucket 里博客目录的公开前缀。 */
   private static final String BLOG_PUBLIC_PREFIX = "https://bucket.example.test/blog/";
 
   private BlogManageService service() {
@@ -48,9 +49,23 @@ class BlogManageServiceTest {
         currentUserProvider, ownerAccess, ossUtil, ossCleanupRecordService);
   }
 
-  /** 把守卫要读的前缀桩上，等价于生产里由 bucket 与 endpoint 拼出的地址。 */
+  /**
+   * 把公开前缀桩上，等价于生产里由 bucket 与 endpoint 拼出的地址。
+   *
+   * 守卫现在比较对象键、不再读它；保留是因为比较逻辑若退回地址字符串，用例仍要在
+   * 真实前缀下评估，否则前缀为 null 会把所有地址一并拦下，回归就观察不到。
+   */
   private void stubBlogPrefix() {
     when(ossUtil.getPublicUrl(OssUtil.FileType.BLOG.getPath())).thenReturn(BLOG_PUBLIC_PREFIX);
+  }
+
+  /**
+   * 守卫要读对象键，这里让它读到真实实现：与删除走的是同一个
+   * {@link OssUtil#objectKeyOf(String)}（取路径、丢弃主机名、百分号解码），
+   * 非法地址照常抛 IllegalArgumentException。
+   */
+  private void stubObjectKeyOf() {
+    doCallRealMethod().when(ossUtil).objectKeyOf(anyString());
   }
 
   private static User user(long id, String username) {
@@ -226,6 +241,7 @@ class BlogManageServiceTest {
   void deleteCleansTheCoverObject() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
     stubBlogPrefix();
+    stubObjectKeyOf();
     Blog stored = blog(1L, 9L, 1);
     stored.setCoverImage("https://bucket.example.test/blog/cover.png");
     when(blogMapper.selectById(1L)).thenReturn(stored);
@@ -244,6 +260,7 @@ class BlogManageServiceTest {
   void deleteDoesNotTouchOssForACoverUrlOnAnotherHost() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
     stubBlogPrefix();
+    stubObjectKeyOf();
     Blog stored = blog(1L, 9L, 1);
     // 攻击形状：别的域名 + 路径落在 gallery 前缀下。objectKeyOf 只取路径、丢弃主机名，
     // 没有守卫时这个地址会被解析成本 bucket 的 imgs/photo.jpg 并真的删掉。
@@ -260,16 +277,36 @@ class BlogManageServiceTest {
   }
 
   @Test
+  void deleteCleansTheBlogObjectEvenWhenTheStoredUrlCarriesAnotherHost() {
+    when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
+    stubObjectKeyOf();
+    Blog stored = blog(1L, 9L, 1);
+    // 主机名不参与「删哪个对象」的判定：objectKeyOf 只取路径，删的始终是本 bucket 的
+    // blog/photo.png。这个用例把删除对象钉在解析出的对象键上，不让守卫回到按地址判定。
+    stored.setCoverImage("https://anything.example/blog/photo.png");
+    when(blogMapper.selectById(1L)).thenReturn(stored);
+    when(deletionService.deleteBlog(1L)).thenReturn(1);
+
+    Result<String> result = service().delete(1L);
+
+    assertEquals(200, result.getCode());
+    verify(ossUtil).deleteByPublicUrl("https://anything.example/blog/photo.png");
+  }
+
+  @Test
   void deleteDoesNotTouchOssForACoverUrlOutsideTheBlogPrefix() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
     stubBlogPrefix();
+    stubObjectKeyOf();
     when(deletionService.deleteBlog(1L)).thenReturn(1);
     String[] foreignCoverUrls = {
         // 同一个 bucket，但不是博客目录
         "https://bucket.example.test/imgs/photo.jpg",
         "https://bucket.example.test/",
-        // 前缀对上但路径会被 HTTP 客户端折叠出博客目录
+        // 字面 .. 写法：解析出的对象键经规范化会离开博客目录
         "https://bucket.example.test/blog/../imgs/photo.jpg",
+        // 同一个对象键的百分号编码写法：objectKeyOf 把它解码成 /blog/../imgs/photo.jpg
+        "https://bucket.example.test/blog/%2e%2e/imgs/photo.jpg",
         // 不是合法 URL
         "not a url",
     };
@@ -290,6 +327,7 @@ class BlogManageServiceTest {
   void deleteRecordsAFailedCleanupInsteadOfReportingSuccess() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
     stubBlogPrefix();
+    stubObjectKeyOf();
     Blog stored = blog(1L, 9L, 1);
     stored.setCoverImage("https://bucket.example.test/blog/cover.png");
     when(blogMapper.selectById(1L)).thenReturn(stored);

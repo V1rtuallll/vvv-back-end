@@ -40,9 +40,17 @@ class BlogManageServiceTest {
   private final OssUtil ossUtil = mock(OssUtil.class);
   private final OssCleanupRecordService ossCleanupRecordService = mock(OssCleanupRecordService.class);
 
+  /** 本站 bucket 里博客目录的公开前缀，守卫用它判断封面地址是否属于本功能。 */
+  private static final String BLOG_PUBLIC_PREFIX = "https://bucket.example.test/blog/";
+
   private BlogManageService service() {
     return new BlogManageService(blogMapper, commentMapper, deletionService,
         currentUserProvider, ownerAccess, ossUtil, ossCleanupRecordService);
+  }
+
+  /** 把守卫要读的前缀桩上，等价于生产里由 bucket 与 endpoint 拼出的地址。 */
+  private void stubBlogPrefix() {
+    when(ossUtil.getPublicUrl(OssUtil.FileType.BLOG.getPath())).thenReturn(BLOG_PUBLIC_PREFIX);
   }
 
   private static User user(long id, String username) {
@@ -217,6 +225,7 @@ class BlogManageServiceTest {
   @Test
   void deleteCleansTheCoverObject() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
+    stubBlogPrefix();
     Blog stored = blog(1L, 9L, 1);
     stored.setCoverImage("https://bucket.example.test/blog/cover.png");
     when(blogMapper.selectById(1L)).thenReturn(stored);
@@ -232,8 +241,55 @@ class BlogManageServiceTest {
   }
 
   @Test
+  void deleteDoesNotTouchOssForACoverUrlOnAnotherHost() {
+    when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
+    stubBlogPrefix();
+    Blog stored = blog(1L, 9L, 1);
+    // 攻击形状：别的域名 + 路径落在 gallery 前缀下。objectKeyOf 只取路径、丢弃主机名，
+    // 没有守卫时这个地址会被解析成本 bucket 的 imgs/photo.jpg 并真的删掉。
+    stored.setCoverImage("https://anything.example/imgs/photo.jpg");
+    when(blogMapper.selectById(1L)).thenReturn(stored);
+    when(deletionService.deleteBlog(1L)).thenReturn(1);
+
+    Result<String> result = service().delete(1L);
+
+    // 外站地址不属于本站，没有可清理的对象，也不算失败
+    assertEquals(200, result.getCode());
+    assertEquals("已删除", result.getMsg());
+    verify(ossUtil, never()).deleteByPublicUrl(anyString());
+  }
+
+  @Test
+  void deleteDoesNotTouchOssForACoverUrlOutsideTheBlogPrefix() {
+    when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
+    stubBlogPrefix();
+    when(deletionService.deleteBlog(1L)).thenReturn(1);
+    String[] foreignCoverUrls = {
+        // 同一个 bucket，但不是博客目录
+        "https://bucket.example.test/imgs/photo.jpg",
+        "https://bucket.example.test/",
+        // 前缀对上但路径会被 HTTP 客户端折叠出博客目录
+        "https://bucket.example.test/blog/../imgs/photo.jpg",
+        // 不是合法 URL
+        "not a url",
+    };
+
+    for (String coverUrl : foreignCoverUrls) {
+      Blog stored = blog(1L, 9L, 1);
+      stored.setCoverImage(coverUrl);
+      when(blogMapper.selectById(1L)).thenReturn(stored);
+
+      Result<String> result = service().delete(1L);
+
+      assertEquals(200, result.getCode(), coverUrl);
+      verify(ossUtil, never()).deleteByPublicUrl(anyString());
+    }
+  }
+
+  @Test
   void deleteRecordsAFailedCleanupInsteadOfReportingSuccess() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
+    stubBlogPrefix();
     Blog stored = blog(1L, 9L, 1);
     stored.setCoverImage("https://bucket.example.test/blog/cover.png");
     when(blogMapper.selectById(1L)).thenReturn(stored);

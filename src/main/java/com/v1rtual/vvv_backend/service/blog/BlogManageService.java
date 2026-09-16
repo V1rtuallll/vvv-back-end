@@ -1,5 +1,7 @@
 package com.v1rtual.vvv_backend.service.blog;
 
+import java.net.URI;
+
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -148,14 +150,45 @@ public class BlogManageService {
         .build());
   }
 
+  /**
+   * 清理封面对象。地址不在本功能自己的 OSS 目录下时不做任何删除，
+   * 按「没有可清理的东西」处理 —— 外站地址不属于本 bucket，也不是失败。
+   *
+   * 守卫放在删除处而不是写入处：coverImage 由客户端提供，历史数据里可能已经存着
+   * 任意地址，写入处拦截不到它们。
+   */
   private boolean deleteCoverObject(String coverImage) {
     if (!StringUtils.hasText(coverImage)) return true;
+    if (!isOwnCoverUrl(coverImage)) {
+      log.warn("封面地址不在博客目录下，跳过 OSS 删除：{}", coverImage);
+      return true;
+    }
     try {
       ossUtil.deleteByPublicUrl(coverImage);
       return true;
     } catch (RuntimeException e) {
       log.error("删除博客封面失败：{}", coverImage, e);
       ossCleanupRecordService.recordFailure(coverImage, OSS_CLEANUP_REASON);
+      return false;
+    }
+  }
+
+  /**
+   * 地址是否位于本站博客目录（{@link OssUtil.FileType#BLOG}）之下。
+   *
+   * {@link OssUtil#objectKeyOf(String)} 只取 URL 的路径、丢弃主机名：任意地址
+   * （例如 https://other.example/imgs/a.jpg）都会被解析成本 bucket 的对象键。
+   * 因此删除前必须先确认地址落在本功能自己的前缀内。
+   *
+   * 比较的是规范化之后的地址：{@code /blog/../imgs/a.jpg} 这类路径会被 HTTP 客户端
+   * 折叠成 {@code /imgs/a.jpg}，按原始字符串比较会漏判。
+   */
+  private boolean isOwnCoverUrl(String coverImage) {
+    String prefix = ossUtil.getPublicUrl(OssUtil.FileType.BLOG.getPath());
+    if (!StringUtils.hasText(prefix)) return false;
+    try {
+      return URI.create(coverImage).normalize().toString().startsWith(prefix);
+    } catch (IllegalArgumentException e) {
       return false;
     }
   }

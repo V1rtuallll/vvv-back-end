@@ -258,6 +258,7 @@ class BlogManageServiceTest {
     Result<String> result = service().delete(1L);
 
     assertEquals(404, result.getCode());
+    assertEquals("文章不存在", result.getMsg());
     verify(ossUtil, never()).deleteByPublicUrl(anyString());
   }
 }

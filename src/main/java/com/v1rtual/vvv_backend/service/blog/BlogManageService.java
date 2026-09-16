@@ -97,7 +97,7 @@ public class BlogManageService {
     if (!canManage(stored, current)) return Result.error(403, OwnerAccess.DENIED_MESSAGE);
 
     // 幂等：并发重复删除时后一个请求拿到的行数会是 0
-    if (deletionService.deleteBlog(id) == 0) return Result.error(404, "资源不存在");
+    if (deletionService.deleteBlog(id) == 0) return Result.error(404, "文章不存在");
 
     if (!deleteCoverObject(stored.getCoverImage())) {
       return Result.error(500, "文章已删除，但 OSS 封面清理失败，已记录待重试");

@@ -1,14 +1,11 @@
 package com.v1rtual.vvv_backend.service.blog;
 
-import java.util.List;
-
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import com.v1rtual.vvv_backend.entity.Blog;
 import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.mapper.BlogMapper;
-import com.v1rtual.vvv_backend.mapper.CommentLikeMapper;
 import com.v1rtual.vvv_backend.mapper.CommentMapper;
 import com.v1rtual.vvv_backend.security.CurrentUserProvider;
 import com.v1rtual.vvv_backend.security.OwnerAccess;
@@ -26,17 +23,19 @@ import lombok.extern.slf4j.Slf4j;
  * 博客的写路径：新建、更新、删除。
  *
  * 权限一律取自 JWT 里的当前用户；入参里没有 authorId 这样的字段可被伪造。
+ * 数据库删除放在 {@link BlogDeletionService} 的事务里；OSS 清理放在事务之外：
+ * OSS 请求不应占用数据库事务，而且数据库删除一旦提交，OSS 失败只能靠可重试记录收敛。
  */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class BlogManageService {
 
-  private static final String OSS_CLEANUP_REASON = "blog_delete";
+  private static final String OSS_CLEANUP_REASON = "删除博客时 OSS 对象清理失败";
 
   private final BlogMapper blogMapper;
   private final CommentMapper commentMapper;
-  private final CommentLikeMapper commentLikeMapper;
+  private final BlogDeletionService deletionService;
   private final CurrentUserProvider currentUserProvider;
   private final OwnerAccess ownerAccess;
   private final OssUtil ossUtil;
@@ -83,8 +82,8 @@ public class BlogManageService {
   /**
    * 删除文章，并级联清理它的评论与评论点赞。
    *
-   * comment 表对 blog 没有外键，comment_like 对 comment 也没有外键，
-   * 所以这里必须显式按顺序清，否则会留下永远读不到的孤立行。
+   * 数据库删除交给 {@link BlogDeletionService}，在一次事务里全部成功或全部回滚；
+   * OSS 清理在事务提交之后才做。
    *
    * 正文内嵌的图片与视频**不清**：同一张图可能被多篇文章引用，且从 Markdown 里
    * 解析全部媒体 URL 不可靠。这是有意的取舍，不是遗漏。
@@ -97,12 +96,8 @@ public class BlogManageService {
     if (stored == null) return Result.error(404, "文章不存在");
     if (!canManage(stored, current)) return Result.error(403, OwnerAccess.DENIED_MESSAGE);
 
-    List<Long> commentIds = commentMapper.selectIdsByBlogId(id);
-    if (!commentIds.isEmpty()) {
-      commentLikeMapper.deleteByCommentIds(commentIds);
-      commentMapper.deleteByIds(commentIds);
-    }
-    blogMapper.deleteById(id);
+    // 幂等：并发重复删除时后一个请求拿到的行数会是 0
+    if (deletionService.deleteBlog(id) == 0) return Result.error(404, "资源不存在");
 
     if (!deleteCoverObject(stored.getCoverImage())) {
       return Result.error(500, "文章已删除，但 OSS 封面清理失败，已记录待重试");

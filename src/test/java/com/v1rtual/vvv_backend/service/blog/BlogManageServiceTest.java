@@ -4,23 +4,22 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 
 import com.v1rtual.vvv_backend.entity.Blog;
 import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.mapper.BlogMapper;
-import com.v1rtual.vvv_backend.mapper.CommentLikeMapper;
 import com.v1rtual.vvv_backend.mapper.CommentMapper;
 import com.v1rtual.vvv_backend.security.CurrentUserProvider;
 import com.v1rtual.vvv_backend.security.OwnerAccess;
@@ -35,14 +34,14 @@ class BlogManageServiceTest {
 
   private final BlogMapper blogMapper = mock(BlogMapper.class);
   private final CommentMapper commentMapper = mock(CommentMapper.class);
-  private final CommentLikeMapper commentLikeMapper = mock(CommentLikeMapper.class);
+  private final BlogDeletionService deletionService = mock(BlogDeletionService.class);
   private final CurrentUserProvider currentUserProvider = mock(CurrentUserProvider.class);
   private final OwnerAccess ownerAccess = mock(OwnerAccess.class);
   private final OssUtil ossUtil = mock(OssUtil.class);
   private final OssCleanupRecordService ossCleanupRecordService = mock(OssCleanupRecordService.class);
 
   private BlogManageService service() {
-    return new BlogManageService(blogMapper, commentMapper, commentLikeMapper,
+    return new BlogManageService(blogMapper, commentMapper, deletionService,
         currentUserProvider, ownerAccess, ossUtil, ossCleanupRecordService);
   }
 
@@ -199,36 +198,20 @@ class BlogManageServiceTest {
     when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 1));
 
     assertEquals(403, service().delete(1L).getCode());
-    verify(blogMapper, never()).deleteById(any());
+    verify(deletionService, never()).deleteBlog(any());
   }
 
   @Test
-  void deleteCascadesCommentsAndTheirLikes() {
+  void deleteHandsTheCascadeToTheDeletionService() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
     when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 1));
-    when(commentMapper.selectIdsByBlogId(1L)).thenReturn(List.of(11L, 12L, 13L));
+    when(deletionService.deleteBlog(1L)).thenReturn(1);
 
     Result<String> result = service().delete(1L);
 
     assertEquals(200, result.getCode());
-    // comment 表对 blog 没有外键，必须显式清；comment_like 对 comment 也没有外键，
-    // 顺序必须是「先点赞、再评论、最后文章」
-    verify(commentLikeMapper).deleteByCommentIds(List.of(11L, 12L, 13L));
-    verify(commentMapper).deleteByIds(List.of(11L, 12L, 13L));
-    verify(blogMapper).deleteById(1L);
-  }
-
-  @Test
-  void deleteSkipsCommentQueriesWhenThereAreNoComments() {
-    when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
-    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 1));
-    when(commentMapper.selectIdsByBlogId(1L)).thenReturn(List.of());
-
-    assertEquals(200, service().delete(1L).getCode());
-
-    // IN () 不是合法 SQL，空列表必须跳过而不是硬发
-    verify(commentLikeMapper, never()).deleteByCommentIds(anyList());
-    verify(commentMapper, never()).deleteByIds(anyList());
+    // 级联的完整性（点赞、评论、文章的顺序与空列表保护）由 BlogDeletionServiceTest 断言
+    verify(deletionService).deleteBlog(1L);
   }
 
   @Test
@@ -237,11 +220,15 @@ class BlogManageServiceTest {
     Blog stored = blog(1L, 9L, 1);
     stored.setCoverImage("https://bucket.example.test/blog/cover.png");
     when(blogMapper.selectById(1L)).thenReturn(stored);
-    when(commentMapper.selectIdsByBlogId(1L)).thenReturn(List.of());
+    when(deletionService.deleteBlog(1L)).thenReturn(1);
 
     service().delete(1L);
 
     verify(ossUtil).deleteByPublicUrl("https://bucket.example.test/blog/cover.png");
+    // OSS 请求不能占用数据库事务，必须在事务方法返回之后才做
+    InOrder inOrder = inOrder(deletionService, ossUtil);
+    inOrder.verify(deletionService).deleteBlog(1L);
+    inOrder.verify(ossUtil).deleteByPublicUrl("https://bucket.example.test/blog/cover.png");
   }
 
   @Test
@@ -250,7 +237,7 @@ class BlogManageServiceTest {
     Blog stored = blog(1L, 9L, 1);
     stored.setCoverImage("https://bucket.example.test/blog/cover.png");
     when(blogMapper.selectById(1L)).thenReturn(stored);
-    when(commentMapper.selectIdsByBlogId(1L)).thenReturn(List.of());
+    when(deletionService.deleteBlog(1L)).thenReturn(1);
     org.mockito.Mockito.doThrow(new RuntimeException("OSS 不可达"))
         .when(ossUtil).deleteByPublicUrl(anyString());
 
@@ -258,6 +245,19 @@ class BlogManageServiceTest {
 
     assertEquals(500, result.getCode());
     verify(ossCleanupRecordService).recordFailure(eq("https://bucket.example.test/blog/cover.png"),
-        anyString());
+        eq("删除博客时 OSS 对象清理失败"));
+  }
+
+  @Test
+  void deleteOnLostRaceReportsMissingAndTouchesNoOssObject() {
+    when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 1));
+    // 幂等：并发重复删除时后一个请求拿到的行数会是 0
+    when(deletionService.deleteBlog(1L)).thenReturn(0);
+
+    Result<String> result = service().delete(1L);
+
+    assertEquals(404, result.getCode());
+    verify(ossUtil, never()).deleteByPublicUrl(anyString());
   }
 }

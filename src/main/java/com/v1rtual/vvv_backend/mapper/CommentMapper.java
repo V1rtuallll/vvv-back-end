@@ -124,4 +124,10 @@ public interface CommentMapper {
   @Select("SELECT COUNT(*) FROM comment " +
       "WHERE target_type = 'blog' AND target_id = #{targetId}")
   int countBlogCommentByTargetId(Long targetId);
+
+  /**
+   * 某篇博客下全部评论的 ID（含各级子评论：回复沿用根评论的 target_id）。
+   */
+  @Select("SELECT id FROM comment WHERE target_type = 'blog' AND target_id = #{targetId}")
+  List<Long> selectIdsByBlogId(@Param("targetId") Long targetId);
 }

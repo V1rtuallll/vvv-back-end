@@ -42,12 +42,17 @@ public class OssUtil {
 
   /**
    * 文件类型枚举
+   *
+   * BLOG 是博客专用的独立前缀。它刻意不参与 MediaTypeDirectory 的映射，
+   * 也不被 ResourceSyncService 的扫描覆盖 —— 这两点共同保证博客媒体不会
+   * 进入 gallery 的类型表。
    */
   public enum FileType {
     IMGS("imgs/"),
     MUSIC("music/"),
     GIF("gif/"),
-    VIDEO("video/");
+    VIDEO("video/"),
+    BLOG("blog/");
 
     private final String path;
 

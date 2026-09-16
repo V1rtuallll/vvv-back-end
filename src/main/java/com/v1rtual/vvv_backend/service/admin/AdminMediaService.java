@@ -165,6 +165,8 @@ public class AdminMediaService {
           .createdAt(now).updatedAt(now).uploaderId(uploaderId).uploaderUsername(uploaderName).build());
       case IMGS -> photoMapper.insert(Photo.builder().src(url).title(title).description("管理员手动上传 - " + url)
           .createdAt(now).updatedAt(now).uploaderId(uploaderId).uploaderUsername(uploaderName).build());
+      // BLOG 不会走到这里：博客媒体由 BlogMediaService 直接上传，不经过 MediaTypeDirectory
+      default -> throw new IllegalArgumentException("不支持的资源类型");
     };
   }
 

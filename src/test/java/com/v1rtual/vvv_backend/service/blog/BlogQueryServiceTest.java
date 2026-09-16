@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -14,6 +15,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 
 import com.v1rtual.vvv_backend.entity.Comment;
 import com.v1rtual.vvv_backend.entity.User;
@@ -126,7 +128,12 @@ class BlogQueryServiceTest {
 
     // 响应里是打开前的数字（5），不是 6 —— 自增留给下一次刷新
     assertEquals(5L, result.getData().getViews());
-    verify(blogMapper).incrementViews(1L);
+
+    // 顺序必须显式断言：桩每次返回的是同一个对象，views 恒为 5，
+    // 所以只看响应值的话，把 incrementViews 提到读取之前也照样通过。
+    InOrder inOrder = inOrder(blogMapper);
+    inOrder.verify(blogMapper).selectWithAuthorById(1L);
+    inOrder.verify(blogMapper).incrementViews(1L);
   }
 
   @Test

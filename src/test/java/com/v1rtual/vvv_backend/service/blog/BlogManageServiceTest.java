@@ -277,27 +277,9 @@ class BlogManageServiceTest {
   }
 
   @Test
-  void deleteCleansTheBlogObjectEvenWhenTheStoredUrlCarriesAnotherHost() {
-    when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
-    stubObjectKeyOf();
-    Blog stored = blog(1L, 9L, 1);
-    // 主机名不参与「删哪个对象」的判定：objectKeyOf 只取路径，删的始终是本 bucket 的
-    // blog/photo.png。这个用例把删除对象钉在解析出的对象键上，不让守卫回到按地址判定。
-    stored.setCoverImage("https://anything.example/blog/photo.png");
-    when(blogMapper.selectById(1L)).thenReturn(stored);
-    when(deletionService.deleteBlog(1L)).thenReturn(1);
-
-    Result<String> result = service().delete(1L);
-
-    assertEquals(200, result.getCode());
-    verify(ossUtil).deleteByPublicUrl("https://anything.example/blog/photo.png");
-  }
-
-  @Test
   void deleteDoesNotTouchOssForACoverUrlOutsideTheBlogPrefix() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
     stubBlogPrefix();
-    stubObjectKeyOf();
     when(deletionService.deleteBlog(1L)).thenReturn(1);
     String[] foreignCoverUrls = {
         // 同一个 bucket，但不是博客目录
@@ -305,8 +287,16 @@ class BlogManageServiceTest {
         "https://bucket.example.test/",
         // 字面 .. 写法：解析出的对象键经规范化会离开博客目录
         "https://bucket.example.test/blog/../imgs/photo.jpg",
-        // 同一个对象键的百分号编码写法：objectKeyOf 把它解码成 /blog/../imgs/photo.jpg
+        // 同一个对象键的百分号编码写法：objectKeyOf 把它解码成 blog/../imgs/photo.jpg
         "https://bucket.example.test/blog/%2e%2e/imgs/photo.jpg",
+        // 再编码一层：解码一次后仍是 blog/%2e%2e/imgs/...，规范化不认百分号
+        "https://bucket.example.test/blog/%252e%252e/imgs/photo.jpg",
+        // 别的域名 + 博客目录路径。objectKeyOf 丢弃主机名，删的会是我们桶里的 blog/photo.png，
+        // 所以这一条必须靠前缀比对拦下
+        "https://anything.example/blog/photo.png",
+        // 前缀之后不是一个普通文件名
+        "https://bucket.example.test/blog/sub/photo.png",
+        "https://bucket.example.test/blog/",
         // 不是合法 URL
         "not a url",
     };

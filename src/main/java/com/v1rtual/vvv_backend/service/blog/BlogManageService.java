@@ -1,6 +1,6 @@
 package com.v1rtual.vvv_backend.service.blog;
 
-import java.net.URI;
+import java.util.regex.Pattern;
 
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -34,6 +34,12 @@ import lombok.extern.slf4j.Slf4j;
 public class BlogManageService {
 
   private static final String OSS_CLEANUP_REASON = "删除博客时 OSS 对象清理失败";
+
+  /**
+   * 上传生成的对象文件名：UUID 加后缀，不含路径分隔符、点段或百分号编码。
+   * 只有匹配它的地址才允许被当作本功能的 OSS 删除目标。
+   */
+  private static final Pattern COVER_FILE_NAME = Pattern.compile("[A-Za-z0-9-]+\\.[A-Za-z0-9]+");
 
   private final BlogMapper blogMapper;
   private final CommentMapper commentMapper;
@@ -174,25 +180,29 @@ public class BlogManageService {
   }
 
   /**
-   * 地址解析出的对象键是否位于本站博客目录（{@link OssUtil.FileType#BLOG}）之下。
+   * 封面地址是不是本站自己生成的一个博客对象。只有确认为真时才会真的去删 OSS。
    *
-   * 判断依据是对象键，不是地址字符串。删除由 {@link OssUtil#deleteByPublicUrl(String)}
-   * 完成，它删掉的键来自 {@link OssUtil#objectKeyOf(String)}：只取路径、丢弃主机名，
-   * 并对路径做百分号解码；规范化本身不做解码。同一个对象键（{@code blog/../imgs/a.jpg}）
-   * 写成字面的 {@code ..} 与写成 {@code %2e%2e} 时，按地址字符串比较会得到相反的结论 ——
-   * 一种写法被拦下、另一种被放行，而两者指向同一个键。折叠不能指望客户端：阿里云 SDK
-   * 关闭了 URI 规范化（setNormalizeUri(false)）。
+   * 这里刻意用**白名单**而不是「判断不在某个黑名单里」。原因是删除的实际落点由
+   * {@link OssUtil#objectKeyOf(String)} 决定，而它只取 URL 的路径、丢弃主机名，
+   * 并对路径做百分号解码；比较字符串时却不做解码 —— 于是同一个对象键
+   * （{@code blog/../imgs/a.jpg}）写成字面的 {@code ..} 和写成 {@code %2e%2e}
+   * 会得到相反的结论，一种被放行、另一种被拦下。阿里云 SDK 关闭了 URI 规范化
+   * （setNormalizeUri(false)），折叠也不能指望客户端。这类「编码变体绕过」在黑名单
+   * 思路上是堵不完的（{@code %2e%2e} 之后还有 {@code %252e%252e}）。
    *
-   * 因此这里按与删除完全相同的方式先解析出对象键，再对对象键做规范化：
-   * 守卫与删除对「要删的是哪个对象」不会再出现分歧。
+   * 白名单只需要回答一个问题：这个地址是不是我们上传时生成的那一种。上传生成的对象键
+   * 形如 {@code blog/<UUID><后缀>}（见 {@link OssUtil#upload}），是博客目录下的**单个**
+   * 文件名，不含任何路径分隔符、点段或百分号编码。所以判据是两条：
+   *
+   * <ol>
+   *   <li>地址必须以本 bucket 博客目录的公开前缀开头 —— 这一条钉住主机名，
+   *       挡住「拿别人的域名配一个 {@code blog/...} 路径来删我们桶里的对象」；</li>
+   *   <li>前缀之后必须只是一个普通文件名 —— 这一条挡住处心积虑的编码变体。</li>
+   * </ol>
    */
   private boolean isOwnCoverUrl(String coverImage) {
-    try {
-      String key = ossUtil.objectKeyOf(coverImage);
-      String normalized = URI.create(key).normalize().getPath();
-      return normalized != null && normalized.startsWith(OssUtil.FileType.BLOG.getPath());
-    } catch (IllegalArgumentException e) {
-      return false;
-    }
+    String prefix = ossUtil.getPublicUrl(OssUtil.FileType.BLOG.getPath());
+    if (!coverImage.startsWith(prefix)) return false;
+    return COVER_FILE_NAME.matcher(coverImage.substring(prefix.length())).matches();
   }
 }

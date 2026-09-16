@@ -83,6 +83,14 @@ public class GalleryInteractionService {
     Long commentId = body == null ? null : body.get("comment_id");
     if (commentId == null) return Result.error(400, "评论ID不能为空");
     if (user == null) return Result.error(401, "请先登录");
+
+    Comment stored = commentMapper.selectById(commentId);
+    if (stored == null) return Result.error(404, "评论不存在");
+    // selectById 不带 target_type 过滤，而 comment 表为 gallery 与 blog 共用、
+    // 两边主键都从 1 自增，必然撞号：少了这一句，gallery 端点能改到博客评论的点赞，
+    // 也能给一个根本不存在的评论 ID 写入点赞行。
+    if (stored.getTargetType() != TargetType.gallery) return Result.error(404, "评论不存在");
+
     if (commentLikeMapper.insert(user.getId(), commentId) == 0) {
       return Result.error(409, "不能重复点赞");
     }

@@ -19,7 +19,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.junit.jupiter.api.Test;
 
+import com.v1rtual.vvv_backend.entity.Comment;
 import com.v1rtual.vvv_backend.entity.Gallery;
+import com.v1rtual.vvv_backend.entity.TargetType;
 import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.mapper.CommentLikeMapper;
 import com.v1rtual.vvv_backend.mapper.CommentMapper;
@@ -124,9 +126,76 @@ class GalleryInteractionServiceTest {
     assertEquals(400, result.getCode());
   }
 
+  // ---------- 评论点赞的目标校验（comment 表为 gallery 与 blog 共用，主键必然撞号） ----------
+
+  @Test
+  void likeCommentIncrementsTheCounterWhenTheRowIsNew() {
+    CommentMapper commentMapper = mock(CommentMapper.class);
+    when(commentMapper.selectById(7L)).thenReturn(comment(7L, TargetType.gallery));
+    CommentLikeMapper commentLikeMapper = mock(CommentLikeMapper.class);
+    when(commentLikeMapper.insert(1L, 7L)).thenReturn(1);
+
+    Result<Void> result = service(commentMapper, commentLikeMapper).likeComment(Map.of("comment_id", 7L), user(1L));
+
+    assertEquals(200, result.getCode());
+    assertEquals("点赞成功", result.getMsg());
+    verify(commentMapper).incrementLikeCount(7L);
+  }
+
+  @Test
+  void duplicateCommentLikeReturnsConflictWithoutIncrementing() {
+    CommentMapper commentMapper = mock(CommentMapper.class);
+    when(commentMapper.selectById(7L)).thenReturn(comment(7L, TargetType.gallery));
+    CommentLikeMapper commentLikeMapper = mock(CommentLikeMapper.class);
+    when(commentLikeMapper.insert(1L, 7L)).thenReturn(0);
+
+    Result<Void> result = service(commentMapper, commentLikeMapper).likeComment(Map.of("comment_id", 7L), user(1L));
+
+    assertEquals(409, result.getCode());
+    verify(commentMapper, never()).incrementLikeCount(anyLong());
+  }
+
+  @Test
+  void likeCommentOnMissingCommentIsRejectedWithoutTouchingTheDatabase() {
+    CommentMapper commentMapper = mock(CommentMapper.class);
+    when(commentMapper.selectById(99L)).thenReturn(null);
+    CommentLikeMapper commentLikeMapper = mock(CommentLikeMapper.class);
+
+    Result<Void> result = service(commentMapper, commentLikeMapper).likeComment(Map.of("comment_id", 99L), user(1L));
+
+    assertEquals(404, result.getCode());
+    verify(commentLikeMapper, never()).insert(anyLong(), anyLong());
+    verify(commentMapper, never()).incrementLikeCount(anyLong());
+  }
+
+  @Test
+  void likeCommentOnBlogCommentIsRejectedWithoutTouchingTheDatabase() {
+    CommentMapper commentMapper = mock(CommentMapper.class);
+    when(commentMapper.selectById(7L)).thenReturn(comment(7L, TargetType.blog));
+    CommentLikeMapper commentLikeMapper = mock(CommentLikeMapper.class);
+
+    Result<Void> result = service(commentMapper, commentLikeMapper).likeComment(Map.of("comment_id", 7L), user(1L));
+
+    assertEquals(404, result.getCode());
+    verify(commentLikeMapper, never()).insert(anyLong(), anyLong());
+    verify(commentMapper, never()).incrementLikeCount(anyLong());
+  }
+
   private GalleryInteractionService service(GalleryMapper galleryMapper, GalleryLikeMapper galleryLikeMapper,
       CommentMapper commentMapper) {
     return new GalleryInteractionService(galleryMapper, galleryLikeMapper, commentMapper, mock(CommentLikeMapper.class));
+  }
+
+  private GalleryInteractionService service(CommentMapper commentMapper, CommentLikeMapper commentLikeMapper) {
+    return new GalleryInteractionService(mock(GalleryMapper.class), mock(GalleryLikeMapper.class), commentMapper,
+        commentLikeMapper);
+  }
+
+  private Comment comment(Long id, TargetType targetType) {
+    Comment comment = new Comment();
+    comment.setId(id);
+    comment.setTargetType(targetType);
+    return comment;
   }
 
   private User user(Long id) {

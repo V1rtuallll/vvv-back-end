@@ -1,13 +1,17 @@
 package com.v1rtual.vvv_backend.service.blog;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
 
 import com.v1rtual.vvv_backend.entity.Comment;
 import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.mapper.BlogMapper;
+import com.v1rtual.vvv_backend.mapper.CommentLikeMapper;
 import com.v1rtual.vvv_backend.mapper.CommentMapper;
 import com.v1rtual.vvv_backend.security.OwnerAccess;
 import com.v1rtual.vvv_backend.service.PageParams;
@@ -37,6 +41,7 @@ public class BlogQueryService {
 
   private final BlogMapper blogMapper;
   private final CommentMapper commentMapper;
+  private final CommentLikeMapper commentLikeMapper;
   private final OwnerAccess ownerAccess;
 
   public Result<PageResultVO<BlogSummaryVO>> list(int page, int limit) {
@@ -102,8 +107,36 @@ public class BlogQueryService {
         .build());
   }
 
-  public Result<List<Comment>> comments(Long blogId) {
-    return Result.success(commentMapper.selectBlogCommentByTargetId(blogId));
+  /**
+   * 评论列表。形状与 GalleryQueryService.comments 一致：likes 缺省为 0，
+   * isLiked 按当前用户在该批评论里的点赞记录逐个填充。
+   *
+   * 未登录时 isLiked 一律为 false，前端据此渲染「已赞」状态；
+   * 重复点赞的 409 判定在 BlogInteractionService 里。
+   */
+  public Result<List<Comment>> comments(Long blogId, User currentUser) {
+    if (blogId == null || blogId <= 0) {
+      return Result.error("资源ID无效");
+    }
+
+    List<Comment> comments = commentMapper.selectBlogCommentByTargetId(blogId);
+    if (comments == null || comments.isEmpty()) {
+      return Result.success(List.of(), "暂无评论");
+    }
+
+    Map<Long, Boolean> likedMap = new HashMap<>();
+    if (currentUser != null) {
+      List<Long> commentIds = comments.stream().map(Comment::getId).collect(Collectors.toList());
+      if (!commentIds.isEmpty()) {
+        commentLikeMapper.selectCommentIdsByUserId(currentUser.getId(), commentIds)
+            .forEach(likedId -> likedMap.put(likedId, true));
+      }
+    }
+    comments.forEach(comment -> {
+      if (comment.getLikes() == null) comment.setLikes(0L);
+      comment.setIsLiked(Boolean.TRUE.equals(likedMap.get(comment.getId())));
+    });
+    return Result.success(comments, "评论加载成功");
   }
 
   /** 作者本人或站点 owner。与 GalleryManageService 的判定口径一致。 */

@@ -69,7 +69,7 @@ public class BlogController {
 
   @GetMapping("/comments/{id}")
   public Result<List<Comment>> comments(@PathVariable Long id) {
-    return blogQueryService.comments(id);
+    return blogQueryService.comments(id, currentUser());
   }
 
   // 刻意不写 value：这样映射到类级别的 /api/blog 本身。

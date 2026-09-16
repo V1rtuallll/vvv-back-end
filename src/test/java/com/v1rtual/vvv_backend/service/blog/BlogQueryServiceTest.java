@@ -1,8 +1,11 @@
 package com.v1rtual.vvv_backend.service.blog;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.inOrder;
@@ -20,6 +23,7 @@ import org.mockito.InOrder;
 import com.v1rtual.vvv_backend.entity.Comment;
 import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.mapper.BlogMapper;
+import com.v1rtual.vvv_backend.mapper.CommentLikeMapper;
 import com.v1rtual.vvv_backend.mapper.CommentMapper;
 import com.v1rtual.vvv_backend.security.OwnerAccess;
 import com.v1rtual.vvv_backend.vo.BlogDetailVO;
@@ -33,10 +37,11 @@ class BlogQueryServiceTest {
 
   private final BlogMapper blogMapper = mock(BlogMapper.class);
   private final CommentMapper commentMapper = mock(CommentMapper.class);
+  private final CommentLikeMapper commentLikeMapper = mock(CommentLikeMapper.class);
   private final OwnerAccess ownerAccess = mock(OwnerAccess.class);
 
   private BlogQueryService service() {
-    return new BlogQueryService(blogMapper, commentMapper, ownerAccess);
+    return new BlogQueryService(blogMapper, commentMapper, commentLikeMapper, ownerAccess);
   }
 
   private static User user(long id, String username) {
@@ -233,16 +238,67 @@ class BlogQueryServiceTest {
 
   // ---------- comments ----------
 
+  private static Comment comment(long id, Long likes) {
+    Comment c = new Comment();
+    c.setId(id);
+    c.setLikes(likes);
+    return c;
+  }
+
   @Test
   void commentsAreDelegatedToTheBlogVariantOfTheMapper() {
-    Comment comment = new Comment();
-    comment.setId(3L);
-    when(commentMapper.selectBlogCommentByTargetId(1L)).thenReturn(List.of(comment));
+    when(commentMapper.selectBlogCommentByTargetId(1L)).thenReturn(List.of(comment(3L, 0L)));
 
-    Result<List<Comment>> result = service().comments(1L);
+    Result<List<Comment>> result = service().comments(1L, user(9L, "someone"));
 
     assertEquals(1, result.getData().size());
     verify(commentMapper, never()).selectGalleryCommentByTargetId(anyLong());
+  }
+
+  @Test
+  void commentsMarkTheCurrentUsersLikesAndLeaveTheRestUnliked() {
+    when(commentMapper.selectBlogCommentByTargetId(1L))
+        .thenReturn(List.of(comment(3L, 2L), comment(4L, 0L)));
+    when(commentLikeMapper.selectCommentIdsByUserId(9L, List.of(3L, 4L))).thenReturn(List.of(3L));
+
+    Result<List<Comment>> result = service().comments(1L, user(9L, "someone"));
+
+    assertTrue(result.getData().get(0).getIsLiked());
+    assertFalse(result.getData().get(1).getIsLiked());
+  }
+
+  @Test
+  void commentsDefaultLikesToZeroAndAreNotLikedForAnonymousVisitors() {
+    when(commentMapper.selectBlogCommentByTargetId(1L)).thenReturn(List.of(comment(3L, null)));
+
+    Result<List<Comment>> result = service().comments(1L, null);
+
+    assertEquals(0L, result.getData().get(0).getLikes());
+    assertFalse(result.getData().get(0).getIsLiked());
+    // 未登录没有可查的点赞记录
+    verify(commentLikeMapper, never()).selectCommentIdsByUserId(anyLong(), anyList());
+  }
+
+  @Test
+  void commentsOnAnEmptyThreadReturnAnEmptyListAndQueryNoLikes() {
+    when(commentMapper.selectBlogCommentByTargetId(1L)).thenReturn(List.of());
+
+    Result<List<Comment>> result = service().comments(1L, user(9L, "someone"));
+
+    assertEquals(200, result.getCode());
+    assertTrue(result.getData().isEmpty());
+    // 空列表拼不出合法的 IN ()，这条查询必须跳过
+    verify(commentLikeMapper, never()).selectCommentIdsByUserId(anyLong(), anyList());
+  }
+
+  @Test
+  void commentsRejectANonPositiveIdInsteadOfQuerying() {
+    for (Long id : new Long[] {0L, -1L, null}) {
+      Result<List<Comment>> result = service().comments(id, user(9L, "someone"));
+
+      assertEquals(500, result.getCode(), "id=" + id);
+    }
+    verify(commentMapper, never()).selectBlogCommentByTargetId(anyLong());
   }
 
 }

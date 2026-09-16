@@ -1,8 +1,15 @@
 package com.v1rtual.vvv_backend.service.blog;
 
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
+import java.util.Set;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import com.v1rtual.vvv_backend.entity.Blog;
@@ -23,7 +30,7 @@ import lombok.RequiredArgsConstructor;
  *
  * 评论点赞复用共享的 comment_like 表 —— 它按 comment_id 索引，与 target_type 无关。
  * 删评论的顺序必须是「先点赞记录、再评论」，comment_like 对 comment 没有外键约束，
- * 反过来会留下孤立行。
+ * 反过来会留下孤立行；两步写入需要落在同一个事务里。
  */
 @Service
 @RequiredArgsConstructor
@@ -68,7 +75,11 @@ public class BlogInteractionService {
    * 这样并发重复请求不会重复递增，也不会抛 DuplicateKeyException。
    * 与 {@link com.v1rtual.vvv_backend.service.gallery.GalleryInteractionService#likeComment}
    * 的语义一致：重复点击只报冲突，不表示取消点赞。
+   *
+   * 点赞行与点赞数必须同事务：中途失败会留下点赞行已写入、计数却没加的状态，
+   * 而重试会命中 409，用户无法自行修复。
    */
+  @Transactional
   public Result<String> likeComment(Long commentId) {
     User current = currentUserProvider.getCurrentUser().orElse(null);
     if (current == null) return Result.error(401, "请先登录");
@@ -86,7 +97,16 @@ public class BlogInteractionService {
     return Result.success("点赞成功");
   }
 
-  /** 评论作者本人、文章作者或站点 owner 都可以删。 */
+  /**
+   * 评论作者本人、文章作者或站点 owner 都可以删。
+   *
+   * 删除整棵回复树而不只是这一个节点：回复沿用根评论的 target_id，
+   * 只删父评论会让子评论的 parent_id 指向一条已不存在的评论，
+   * 在文章页上成为悬空的回复。收集方式与
+   * {@link com.v1rtual.vvv_backend.service.gallery.GalleryDeletionService#deleteComment}
+   * 一致。
+   */
+  @Transactional
   public Result<String> deleteComment(Long commentId) {
     User current = currentUserProvider.getCurrentUser().orElse(null);
     if (current == null) return Result.error(401, "请先登录");
@@ -102,10 +122,42 @@ public class BlogInteractionService {
       return Result.error(403, OwnerAccess.DENIED_MESSAGE);
     }
 
-    List<Long> ids = List.of(commentId);
-    commentLikeMapper.deleteByCommentIds(ids);
-    commentMapper.deleteByIds(ids);
+    List<Long> ids = collectCommentTreeIds(List.of(commentId));
+    if (!ids.isEmpty()) {
+      commentLikeMapper.deleteByCommentIds(ids);
+      commentMapper.deleteByIds(ids);
+    }
     return Result.success("已删除");
+  }
+
+  /**
+   * 广度优先收集整棵回复树：逐层用 parent_id 查下一层，
+   * 已访问的 ID 只处理一次，父子关系成环时不会死循环。
+   * 起点是已知属于博客的评论，所以每一层都无需再按 target_type 过滤。
+   */
+  private List<Long> collectCommentTreeIds(List<Long> rootIds) {
+    Set<Long> visited = new LinkedHashSet<>();
+    List<Long> collected = new ArrayList<>();
+    Deque<Long> pending = new ArrayDeque<>();
+    if (rootIds != null) {
+      rootIds.stream().filter(Objects::nonNull).forEach(pending::add);
+    }
+
+    while (!pending.isEmpty()) {
+      List<Long> level = new ArrayList<>();
+      while (!pending.isEmpty()) {
+        Long id = pending.poll();
+        if (visited.add(id)) level.add(id);
+      }
+      // 整层都访问过（父子关系成环）时不再查库，IN () 不是合法 SQL
+      if (level.isEmpty()) break;
+      collected.addAll(level);
+      List<Long> children = commentMapper.selectIdsByParentIds(level);
+      if (children != null) {
+        children.stream().filter(Objects::nonNull).forEach(pending::add);
+      }
+    }
+    return collected;
   }
 
   private boolean canDeleteComment(Comment stored, User current) {

@@ -156,28 +156,42 @@ class BlogInteractionServiceTest {
   // ---------- deleteComment ----------
 
   @Test
-  void commentAuthorCanDeleteOwnComment() {
+  void commentAuthorCanDeleteOwnCommentAndItsReplies() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
     when(commentMapper.selectById(3L)).thenReturn(comment(3L, 9L, 1L));
-    when(commentMapper.selectIdsByBlogId(1L)).thenReturn(List.of(3L));
+    when(commentMapper.selectIdsByParentIds(List.of(3L))).thenReturn(List.of(4L, 5L));
 
     Result<String> result = service().deleteComment(3L);
 
     assertEquals(200, result.getCode());
-    verify(commentLikeMapper).deleteByCommentIds(List.of(3L));
-    verify(commentMapper).deleteByIds(List.of(3L));
+    verify(commentLikeMapper).deleteByCommentIds(List.of(3L, 4L, 5L));
+    verify(commentMapper).deleteByIds(List.of(3L, 4L, 5L));
   }
 
   @Test
-  void blogAuthorCanDeleteSomeoneElsesCommentOnTheirPost() {
+  void blogAuthorCanDeleteSomeoneElsesCommentOnTheirPostIncludingNestedReplies() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(42L, "owner-of-post")));
     when(commentMapper.selectById(3L)).thenReturn(comment(3L, 9L, 1L));
     // 用 any() 而非 any(Class)：loadBlog 查出来的对象可能是 null，
     // 而 Mockito 2 起 any(Class) 不匹配 null
     when(blogManageService.canManage(any(), any())).thenReturn(true);
-    when(commentMapper.selectIdsByBlogId(1L)).thenReturn(List.of(3L));
+    // 回复的回复也要一起删：BFS 不能只走一层
+    when(commentMapper.selectIdsByParentIds(List.of(3L))).thenReturn(List.of(4L));
+    when(commentMapper.selectIdsByParentIds(List.of(4L))).thenReturn(List.of(9L));
 
     assertEquals(200, service().deleteComment(3L).getCode());
+    verify(commentLikeMapper).deleteByCommentIds(List.of(3L, 4L, 9L));
+    verify(commentMapper).deleteByIds(List.of(3L, 4L, 9L));
+  }
+
+  @Test
+  void commentWithoutRepliesDeletesOnlyItself() {
+    when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
+    when(commentMapper.selectById(3L)).thenReturn(comment(3L, 9L, 1L));
+
+    assertEquals(200, service().deleteComment(3L).getCode());
+    verify(commentLikeMapper).deleteByCommentIds(List.of(3L));
+    verify(commentMapper).deleteByIds(List.of(3L));
   }
 
   @Test
@@ -188,6 +202,7 @@ class BlogInteractionServiceTest {
 
     assertEquals(403, service().deleteComment(3L).getCode());
     verify(commentMapper, never()).deleteByIds(any());
+    verify(commentLikeMapper, never()).deleteByCommentIds(any());
   }
 
   @Test

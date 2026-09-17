@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 
 import com.v1rtual.vvv_backend.mapper.BlogMapper;
+import com.v1rtual.vvv_backend.mapper.BlogMediaMapper;
 import com.v1rtual.vvv_backend.mapper.CommentLikeMapper;
 import com.v1rtual.vvv_backend.mapper.CommentMapper;
 
@@ -22,9 +23,10 @@ class BlogDeletionServiceTest {
   private final BlogMapper blogMapper = mock(BlogMapper.class);
   private final CommentMapper commentMapper = mock(CommentMapper.class);
   private final CommentLikeMapper commentLikeMapper = mock(CommentLikeMapper.class);
+  private final BlogMediaMapper blogMediaMapper = mock(BlogMediaMapper.class);
 
   private BlogDeletionService service() {
-    return new BlogDeletionService(blogMapper, commentMapper, commentLikeMapper);
+    return new BlogDeletionService(blogMapper, commentMapper, commentLikeMapper, blogMediaMapper);
   }
 
   @Test
@@ -37,9 +39,10 @@ class BlogDeletionServiceTest {
     assertEquals(1, deleted);
     // comment_like 对 comment 没有外键，顺序必须是「先点赞、再评论、最后文章」：
     // 先删评论会让点赞行永远读不到，也就永远清不掉
-    InOrder inOrder = inOrder(commentLikeMapper, commentMapper, blogMapper);
+    InOrder inOrder = inOrder(commentLikeMapper, commentMapper, blogMediaMapper, blogMapper);
     inOrder.verify(commentLikeMapper).deleteByCommentIds(List.of(11L, 12L, 13L));
     inOrder.verify(commentMapper).deleteByIds(List.of(11L, 12L, 13L));
+    inOrder.verify(blogMediaMapper).deleteByBlogId(1L);
     inOrder.verify(blogMapper).deleteById(1L);
   }
 
@@ -62,5 +65,25 @@ class BlogDeletionServiceTest {
     when(blogMapper.deleteById(404L)).thenReturn(0);
 
     assertEquals(0, service().deleteBlog(404L));
+  }
+
+  @Test
+  void deletesTheCoverRowsEvenWhenThereAreNoComments() {
+    when(commentMapper.selectIdsByBlogId(1L)).thenReturn(List.of());
+    when(blogMapper.deleteById(1L)).thenReturn(1);
+
+    assertEquals(1, service().deleteBlog(1L));
+
+    verify(blogMediaMapper).deleteByBlogId(1L);
+  }
+
+  @Test
+  void stillReportsMissingWhenThePostIsGoneButCleansItsCoverRowsFirst() {
+    when(commentMapper.selectIdsByBlogId(404L)).thenReturn(List.of());
+    when(blogMapper.deleteById(404L)).thenReturn(0);
+
+    assertEquals(0, service().deleteBlog(404L));
+
+    verify(blogMediaMapper).deleteByBlogId(404L);
   }
 }

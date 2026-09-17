@@ -1,13 +1,16 @@
 package com.v1rtual.vvv_backend.service.blog;
 
-import java.util.regex.Pattern;
+import java.util.List;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import com.v1rtual.vvv_backend.entity.Blog;
+import com.v1rtual.vvv_backend.entity.BlogMedia;
 import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.mapper.BlogMapper;
+import com.v1rtual.vvv_backend.mapper.BlogMediaMapper;
 import com.v1rtual.vvv_backend.mapper.CommentMapper;
 import com.v1rtual.vvv_backend.security.CurrentUserProvider;
 import com.v1rtual.vvv_backend.security.OwnerAccess;
@@ -35,12 +38,6 @@ public class BlogManageService {
 
   private static final String OSS_CLEANUP_REASON = "删除博客时 OSS 对象清理失败";
 
-  /**
-   * 上传生成的对象文件名：UUID 加后缀，不含路径分隔符、点段或百分号编码。
-   * 只有匹配它的地址才允许被当作本功能的 OSS 删除目标。
-   */
-  private static final Pattern COVER_FILE_NAME = Pattern.compile("[A-Za-z0-9-]+\\.[A-Za-z0-9]+");
-
   private final BlogMapper blogMapper;
   private final CommentMapper commentMapper;
   private final BlogDeletionService deletionService;
@@ -48,7 +45,15 @@ public class BlogManageService {
   private final OwnerAccess ownerAccess;
   private final OssUtil ossUtil;
   private final OssCleanupRecordService ossCleanupRecordService;
+  private final BlogMediaMapper blogMediaMapper;
 
+  /**
+   * 新建文章。
+   *
+   * 事务盖住「插入文章 + 绑定封面」两步：绑定出问题时文章不该留下来，
+   * 否则会有一篇封面没登记、删除时清不掉 OSS 对象的文章。
+   */
+  @Transactional
   public Result<BlogDetailVO> create(BlogSaveVO body) {
     User current = currentUserProvider.getCurrentUser().orElse(null);
     if (current == null) return Result.error(401, "请先登录");
@@ -56,17 +61,23 @@ public class BlogManageService {
     Result<BlogDetailVO> invalid = validate(body);
     if (invalid != null) return invalid;
 
+    String cover = normalizeCover(body.getCoverImage());
+    Result<BlogDetailVO> coverDenied = checkCover(cover, current, null);
+    if (coverDenied != null) return coverDenied;
+
     Blog blog = new Blog();
     blog.setTitle(body.getTitle().trim());
     blog.setContent(body.getContent());
-    blog.setCoverImage(StringUtils.hasText(body.getCoverImage()) ? body.getCoverImage().trim() : null);
+    blog.setCoverImage(cover);
     blog.setAuthorId(current.getId());
     blog.setStatus(normalizeStatus(body.getStatus()));
 
     blogMapper.insert(blog);
+    bindCover(blog.getId(), cover);
     return loadForResponse(blog.getId());
   }
 
+  @Transactional
   public Result<BlogDetailVO> update(Long id, BlogSaveVO body) {
     User current = currentUserProvider.getCurrentUser().orElse(null);
     if (current == null) return Result.error(401, "请先登录");
@@ -78,20 +89,27 @@ public class BlogManageService {
     Result<BlogDetailVO> invalid = validate(body);
     if (invalid != null) return invalid;
 
+    String cover = normalizeCover(body.getCoverImage());
+    Result<BlogDetailVO> coverDenied = checkCover(cover, current, id);
+    if (coverDenied != null) return coverDenied;
+
     stored.setTitle(body.getTitle().trim());
     stored.setContent(body.getContent());
-    stored.setCoverImage(StringUtils.hasText(body.getCoverImage()) ? body.getCoverImage().trim() : null);
+    stored.setCoverImage(cover);
     stored.setStatus(normalizeStatus(body.getStatus()));
 
     blogMapper.update(stored);
+    bindCover(id, cover);
     return loadForResponse(id);
   }
 
   /**
-   * 删除文章，并级联清理它的评论与评论点赞。
+   * 删除文章，并级联清理它的评论、评论点赞与已登记的封面对象。
    *
    * 数据库删除交给 {@link BlogDeletionService}，在一次事务里全部成功或全部回滚；
    * OSS 清理在事务提交之后才做。
+   *
+   * 对象键必须在事务**之前**读出来：blog_media 的行会随文章一起删掉，之后再查就没了。
    *
    * 正文内嵌的图片与视频**不清**：同一张图可能被多篇文章引用，且从 Markdown 里
    * 解析全部媒体 URL 不可靠。这是有意的取舍，不是遗漏。
@@ -104,11 +122,15 @@ public class BlogManageService {
     if (stored == null) return Result.error(404, "文章不存在");
     if (!canManage(stored, current)) return Result.error(403, OwnerAccess.DENIED_MESSAGE);
 
+    List<BlogMedia> covers = blogMediaMapper.selectByBlogId(id);
+
     // 幂等：并发重复删除时后一个请求拿到的行数会是 0
     if (deletionService.deleteBlog(id) == 0) return Result.error(404, "文章不存在");
 
-    if (!deleteCoverObject(stored.getCoverImage())) {
-      return Result.error(500, "文章已删除，但 OSS 封面清理失败，已记录待重试");
+    for (BlogMedia cover : covers) {
+      if (!deleteCoverObject(cover)) {
+        return Result.error(500, "文章已删除，但 OSS 封面清理失败，已记录待重试");
+      }
     }
     return Result.success("已删除");
   }
@@ -156,53 +178,70 @@ public class BlogManageService {
         .build());
   }
 
-  /**
-   * 清理封面对象。地址不在本功能自己的 OSS 目录下时不做任何删除，
-   * 按「没有可清理的东西」处理 —— 外站地址不属于本 bucket，也不是失败。
-   *
-   * 守卫放在删除处而不是写入处：coverImage 由客户端提供，历史数据里可能已经存着
-   * 任意地址，写入处拦截不到它们。
-   */
-  private boolean deleteCoverObject(String coverImage) {
-    if (!StringUtils.hasText(coverImage)) return true;
-    if (!isOwnCoverUrl(coverImage)) {
-      log.warn("封面地址不在博客目录下，跳过 OSS 删除：{}", coverImage);
-      return true;
-    }
-    try {
-      ossUtil.deleteByPublicUrl(coverImage);
-      return true;
-    } catch (RuntimeException e) {
-      log.error("删除博客封面失败：{}", coverImage, e);
-      ossCleanupRecordService.recordFailure(coverImage, OSS_CLEANUP_REASON);
-      return false;
-    }
+  /** 空串与纯空白统一成 null，避免存下既不是封面、也判不了空的值。 */
+  private String normalizeCover(String coverImage) {
+    return StringUtils.hasText(coverImage) ? coverImage.trim() : null;
   }
 
   /**
-   * 封面地址是不是本站自己生成的一个博客对象。只有确认为真时才会真的去删 OSS。
+   * 校验封面是不是本功能上传过、且当前用户有权使用的博客对象。
    *
-   * 这里刻意用**白名单**而不是「判断不在某个黑名单里」。原因是删除的实际落点由
-   * {@link OssUtil#objectKeyOf(String)} 决定，而它只取 URL 的路径、丢弃主机名，
-   * 并对路径做百分号解码；比较字符串时却不做解码 —— 于是同一个对象键
-   * （{@code blog/../imgs/a.jpg}）写成字面的 {@code ..} 和写成 {@code %2e%2e}
-   * 会得到相反的结论，一种被放行、另一种被拦下。阿里云 SDK 关闭了 URI 规范化
-   * （setNormalizeUri(false)），折叠也不能指望客户端。这类「编码变体绕过」在黑名单
-   * 思路上是堵不完的（{@code %2e%2e} 之后还有 {@code %252e%252e}）。
+   * 判据是**整串精确匹配** blog_media.url：地址是我们上传时自己写进库的，
+   * 客户端拿回来的必须一字不差。这一条同时解决三件事 ——
+   * 外部域名的地址在表里根本不存在，不会被解析成对象键去删本桶的东西；
+   * gallery 的 imgs/ 地址从来没进过这张表，文章用不了 gallery 的 OSS 资源；
+   * 别人的上传有 uploader_id 可查，不再是「谁都能删」。
    *
-   * 白名单只需要回答一个问题：这个地址是不是我们上传时生成的那一种。上传生成的对象键
-   * 形如 {@code blog/<UUID><后缀>}（见 {@link OssUtil#upload}），是博客目录下的**单个**
-   * 文件名，不含任何路径分隔符、点段或百分号编码。所以判据是两条：
-   *
-   * <ol>
-   *   <li>地址必须以本 bucket 博客目录的公开前缀开头 —— 这一条钉住主机名，
-   *       挡住「拿别人的域名配一个 {@code blog/...} 路径来删我们桶里的对象」；</li>
-   *   <li>前缀之后必须只是一个普通文件名 —— 这一条挡住处心积虑的编码变体。</li>
-   * </ol>
+   * @param blogId 更新时传目标文章，新建时传 null（此时不接受已被别篇占用的封面）
+   * @return 返回错误结果表示不通过；返回 null 表示通过
    */
-  private boolean isOwnCoverUrl(String coverImage) {
-    String prefix = ossUtil.getPublicUrl(OssUtil.FileType.BLOG.getPath());
-    if (!coverImage.startsWith(prefix)) return false;
-    return COVER_FILE_NAME.matcher(coverImage.substring(prefix.length())).matches();
+  private Result<BlogDetailVO> checkCover(String cover, User current, Long blogId) {
+    if (cover == null) return null;
+
+    BlogMedia media = blogMediaMapper.selectByUrl(cover);
+    if (media == null) return Result.error(400, "封面必须是博客上传接口返回的地址");
+    if (!ownerAccess.isOwner(current) && !current.getId().equals(media.getUploaderId())) {
+      return Result.error(403, OwnerAccess.DENIED_MESSAGE);
+    }
+    if (media.getBlogId() != null && !media.getBlogId().equals(blogId)) {
+      return Result.error(409, "该封面已被其它文章使用");
+    }
+    return null;
+  }
+
+  /**
+   * 让这篇文章占用 cover 这个对象：先释放它原先占用的，再绑上新的。
+   *
+   * cover 为 null 时只释放不绑定 —— 换封面时旧的那条回到未占用状态。
+   * **只解绑、不删对象**：正文里可能还嵌着同一张图，删掉会把正文打穿。
+   */
+  private void bindCover(Long blogId, String cover) {
+    blogMediaMapper.unbindByBlogId(blogId);
+    if (cover != null) blogMediaMapper.bindToBlogByUrl(cover, blogId);
+  }
+
+  /**
+   * 清理一个已登记封面的 OSS 对象。
+   *
+   * 对象键取自 blog_media 行、**不从地址解析**：解析会把主机名丢掉，于是
+   * 「别人的域名 + 我们的路径」就能删掉本桶的对象。键一旦不是 blog/ 开头，
+   * 就一定不是本功能上传的东西 —— 这是全仓库唯一一处由外部输入触发的删除调用，
+   * 多一道前缀检查作为兜底。
+   */
+  private boolean deleteCoverObject(BlogMedia media) {
+    String objectKey = media.getObjectKey();
+    if (!StringUtils.hasText(objectKey)
+        || !objectKey.startsWith(OssUtil.FileType.BLOG.getPath())) {
+      log.warn("登记行 {} 的对象键不在博客目录下，跳过 OSS 删除：{}", media.getId(), objectKey);
+      return true;
+    }
+    try {
+      ossUtil.delete(objectKey);
+      return true;
+    } catch (RuntimeException e) {
+      log.error("删除博客封面失败：{}", media.getUrl(), e);
+      ossCleanupRecordService.recordFailure(media.getUrl(), OSS_CLEANUP_REASON);
+      return false;
+    }
   }
 }

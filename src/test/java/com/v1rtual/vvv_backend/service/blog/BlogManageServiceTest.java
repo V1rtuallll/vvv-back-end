@@ -6,21 +6,24 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.doCallRealMethod;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 
 import com.v1rtual.vvv_backend.entity.Blog;
+import com.v1rtual.vvv_backend.entity.BlogMedia;
 import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.mapper.BlogMapper;
+import com.v1rtual.vvv_backend.mapper.BlogMediaMapper;
 import com.v1rtual.vvv_backend.mapper.CommentMapper;
 import com.v1rtual.vvv_backend.security.CurrentUserProvider;
 import com.v1rtual.vvv_backend.security.OwnerAccess;
@@ -40,32 +43,27 @@ class BlogManageServiceTest {
   private final OwnerAccess ownerAccess = mock(OwnerAccess.class);
   private final OssUtil ossUtil = mock(OssUtil.class);
   private final OssCleanupRecordService ossCleanupRecordService = mock(OssCleanupRecordService.class);
+  private final BlogMediaMapper blogMediaMapper = mock(BlogMediaMapper.class);
 
-  /** 本站 bucket 里博客目录的公开前缀。 */
-  private static final String BLOG_PUBLIC_PREFIX = "https://bucket.example.test/blog/";
+  private static final String COVER_URL = "https://bucket.example.test/blog/cover.png";
 
   private BlogManageService service() {
-    return new BlogManageService(blogMapper, commentMapper, deletionService,
-        currentUserProvider, ownerAccess, ossUtil, ossCleanupRecordService);
+    return new BlogManageService(blogMapper, commentMapper, deletionService, currentUserProvider,
+        ownerAccess, ossUtil, ossCleanupRecordService, blogMediaMapper);
   }
 
-  /**
-   * 把公开前缀桩上，等价于生产里由 bucket 与 endpoint 拼出的地址。
-   *
-   * 守卫现在比较对象键、不再读它；保留是因为比较逻辑若退回地址字符串，用例仍要在
-   * 真实前缀下评估，否则前缀为 null 会把所有地址一并拦下，回归就观察不到。
-   */
-  private void stubBlogPrefix() {
-    when(ossUtil.getPublicUrl(OssUtil.FileType.BLOG.getPath())).thenReturn(BLOG_PUBLIC_PREFIX);
+  private static BlogMedia media(long id, String url, Long uploaderId, Long blogId) {
+    BlogMedia m = new BlogMedia();
+    m.setId(id);
+    m.setUrl(url);
+    m.setObjectKey("blog/cover.png");
+    m.setUploaderId(uploaderId);
+    m.setBlogId(blogId);
+    return m;
   }
 
-  /**
-   * 守卫要读对象键，这里让它读到真实实现：与删除走的是同一个
-   * {@link OssUtil#objectKeyOf(String)}（取路径、丢弃主机名、百分号解码），
-   * 非法地址照常抛 IllegalArgumentException。
-   */
-  private void stubObjectKeyOf() {
-    doCallRealMethod().when(ossUtil).objectKeyOf(anyString());
+  private void stubCoverRow(BlogMedia row) {
+    when(blogMediaMapper.selectByUrl(COVER_URL)).thenReturn(row);
   }
 
   private static User user(long id, String username) {
@@ -156,7 +154,7 @@ class BlogManageServiceTest {
     when(blogMapper.selectWithAuthorById(42L)).thenReturn(saved(42L, "标题"));
     when(commentMapper.countBlogCommentByTargetId(42L)).thenReturn(0);
 
-    Result<BlogDetailVO> result = service().create(body("标题", "正文", "https://x/c.png", 1));
+    Result<BlogDetailVO> result = service().create(body("标题", "正文", null, 1));
 
     assertEquals(200, result.getCode());
     verify(blogMapper).insert(org.mockito.ArgumentMatchers.argThat(
@@ -237,112 +235,192 @@ class BlogManageServiceTest {
     verify(deletionService).deleteBlog(1L);
   }
 
+  // ---------- 封面归属（写入路径） ----------
+
   @Test
-  void deleteCleansTheCoverObject() {
+  void createRejectsACoverThatWasNotUploadedThroughThisFeature() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
-    stubBlogPrefix();
-    stubObjectKeyOf();
-    Blog stored = blog(1L, 9L, 1);
-    stored.setCoverImage("https://bucket.example.test/blog/cover.png");
-    when(blogMapper.selectById(1L)).thenReturn(stored);
-    when(deletionService.deleteBlog(1L)).thenReturn(1);
+    // gallery 的地址、外站地址、随手编的地址都落在这一支：表里没有行
+    stubCoverRow(null);
 
-    service().delete(1L);
+    Result<BlogDetailVO> result = service().create(body("标题", "正文", COVER_URL, 1));
 
-    verify(ossUtil).deleteByPublicUrl("https://bucket.example.test/blog/cover.png");
-    // OSS 请求不能占用数据库事务，必须在事务方法返回之后才做
-    InOrder inOrder = inOrder(deletionService, ossUtil);
-    inOrder.verify(deletionService).deleteBlog(1L);
-    inOrder.verify(ossUtil).deleteByPublicUrl("https://bucket.example.test/blog/cover.png");
+    assertEquals(400, result.getCode());
+    assertEquals("封面必须是博客上传接口返回的地址", result.getMsg());
+    verify(blogMapper, never()).insert(any());
   }
 
   @Test
-  void deleteDoesNotTouchOssForACoverUrlOnAnotherHost() {
+  void createRejectsACoverUploadedBySomebodyElse() {
+    when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(77L, "stranger")));
+    stubCoverRow(media(1L, COVER_URL, 9L, null));
+
+    Result<BlogDetailVO> result = service().create(body("标题", "正文", COVER_URL, 1));
+
+    assertEquals(403, result.getCode());
+    verify(blogMapper, never()).insert(any());
+  }
+
+  @Test
+  void theSiteOwnerMayUseAnybodysCover() {
+    when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(77L, "V1rtual")));
+    when(ownerAccess.isOwner(any(User.class))).thenReturn(true);
+    stubCoverRow(media(1L, COVER_URL, 9L, null));
+    when(blogMapper.insert(any(Blog.class))).thenAnswer(invocation -> {
+      invocation.getArgument(0, Blog.class).setId(42L);
+      return 1;
+    });
+    when(blogMapper.selectWithAuthorById(42L)).thenReturn(saved(42L, "标题"));
+    when(commentMapper.countBlogCommentByTargetId(42L)).thenReturn(0);
+
+    assertEquals(200, service().create(body("标题", "正文", COVER_URL, 1)).getCode());
+    verify(blogMediaMapper).bindToBlogByUrl(COVER_URL, 42L);
+  }
+
+  @Test
+  void createBindsTheCoverToTheNewPostAfterReleasingWhateverItHeld() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
-    stubBlogPrefix();
-    stubObjectKeyOf();
-    Blog stored = blog(1L, 9L, 1);
-    // 攻击形状：别的域名 + 路径落在 gallery 前缀下。objectKeyOf 只取路径、丢弃主机名，
-    // 没有守卫时这个地址会被解析成本 bucket 的 imgs/photo.jpg 并真的删掉。
-    stored.setCoverImage("https://anything.example/imgs/photo.jpg");
-    when(blogMapper.selectById(1L)).thenReturn(stored);
+    stubCoverRow(media(1L, COVER_URL, 9L, null));
+    when(blogMapper.insert(any(Blog.class))).thenAnswer(invocation -> {
+      invocation.getArgument(0, Blog.class).setId(42L);
+      return 1;
+    });
+    when(blogMapper.selectWithAuthorById(42L)).thenReturn(saved(42L, "标题"));
+    when(commentMapper.countBlogCommentByTargetId(42L)).thenReturn(0);
+
+    service().create(body("标题", "正文", COVER_URL, 1));
+
+    // 先释放、再绑定：顺序反了会把刚绑上的那条又解掉
+    InOrder inOrder = inOrder(blogMediaMapper);
+    inOrder.verify(blogMediaMapper).unbindByBlogId(42L);
+    inOrder.verify(blogMediaMapper).bindToBlogByUrl(COVER_URL, 42L);
+  }
+
+  @Test
+  void updateRejectsACoverAlreadyUsedByAnotherPost() {
+    when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 1));
+    // 已绑定给文章 7，而当前在改文章 1
+    stubCoverRow(media(1L, COVER_URL, 9L, 7L));
+
+    Result<BlogDetailVO> result = service().update(1L, body("改后", "正文", COVER_URL, 1));
+
+    assertEquals(409, result.getCode());
+    assertEquals("该封面已被其它文章使用", result.getMsg());
+    verify(blogMapper, never()).update(any());
+  }
+
+  @Test
+  void updateAcceptsTheCoverItAlreadyHolds() {
+    when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 1));
+    stubCoverRow(media(1L, COVER_URL, 9L, 1L));
+    when(blogMapper.selectWithAuthorById(1L)).thenReturn(saved(1L, "改后"));
+    when(commentMapper.countBlogCommentByTargetId(1L)).thenReturn(0);
+
+    assertEquals(200, service().update(1L, body("改后", "正文", COVER_URL, 1)).getCode());
+  }
+
+  @Test
+  void removingTheCoverReleasesTheRowWithoutDeletingTheObject() {
+    when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 1));
+    when(blogMapper.selectWithAuthorById(1L)).thenReturn(saved(1L, "改后"));
+    when(commentMapper.countBlogCommentByTargetId(1L)).thenReturn(0);
+
+    service().update(1L, body("改后", "正文", null, 1));
+
+    verify(blogMediaMapper).unbindByBlogId(1L);
+    verify(blogMediaMapper, never()).bindToBlogByUrl(anyString(), any());
+    // 正文里可能还嵌着同一张图，删对象会把正文打穿
+    verify(ossUtil, never()).delete(anyString());
+  }
+
+  // ---------- 封面清理（删除路径） ----------
+
+  @Test
+  void deleteCleansTheObjectKeysBoundToThisPost() {
+    when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 1));
+    when(blogMediaMapper.selectByBlogId(1L)).thenReturn(List.of(media(1L, COVER_URL, 9L, 1L)));
     when(deletionService.deleteBlog(1L)).thenReturn(1);
 
     Result<String> result = service().delete(1L);
 
-    // 外站地址不属于本站，没有可清理的对象，也不算失败
     assertEquals(200, result.getCode());
-    assertEquals("已删除", result.getMsg());
+    // 键取自登记行，不从地址解析
+    verify(ossUtil).delete("blog/cover.png");
     verify(ossUtil, never()).deleteByPublicUrl(anyString());
   }
 
   @Test
-  void deleteDoesNotTouchOssForACoverUrlOutsideTheBlogPrefix() {
+  void deleteReadsTheObjectKeysBeforeTheRowsAreDeleted() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
-    stubBlogPrefix();
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 1));
+    when(blogMediaMapper.selectByBlogId(1L)).thenReturn(List.of(media(1L, COVER_URL, 9L, 1L)));
     when(deletionService.deleteBlog(1L)).thenReturn(1);
-    String[] foreignCoverUrls = {
-        // 同一个 bucket，但不是博客目录
-        "https://bucket.example.test/imgs/photo.jpg",
-        "https://bucket.example.test/",
-        // 字面 .. 写法：解析出的对象键经规范化会离开博客目录
-        "https://bucket.example.test/blog/../imgs/photo.jpg",
-        // 同一个对象键的百分号编码写法：objectKeyOf 把它解码成 blog/../imgs/photo.jpg
-        "https://bucket.example.test/blog/%2e%2e/imgs/photo.jpg",
-        // 再编码一层：解码一次后仍是 blog/%2e%2e/imgs/...，规范化不认百分号
-        "https://bucket.example.test/blog/%252e%252e/imgs/photo.jpg",
-        // 别的域名 + 博客目录路径。objectKeyOf 丢弃主机名，删的会是我们桶里的 blog/photo.png，
-        // 所以这一条必须靠前缀比对拦下
-        "https://anything.example/blog/photo.png",
-        // 前缀之后不是一个普通文件名
-        "https://bucket.example.test/blog/sub/photo.png",
-        "https://bucket.example.test/blog/",
-        // 不是合法 URL
-        "not a url",
-    };
 
-    for (String coverUrl : foreignCoverUrls) {
-      Blog stored = blog(1L, 9L, 1);
-      stored.setCoverImage(coverUrl);
-      when(blogMapper.selectById(1L)).thenReturn(stored);
+    service().delete(1L);
 
-      Result<String> result = service().delete(1L);
+    // 事务删掉登记行之后就查不到了，读取必须排在事务之前
+    InOrder inOrder = inOrder(blogMediaMapper, deletionService);
+    inOrder.verify(blogMediaMapper).selectByBlogId(1L);
+    inOrder.verify(deletionService).deleteBlog(1L);
+    // OSS 请求不能占用数据库事务，必须在事务方法返回之后才做
+    InOrder ossOrder = inOrder(deletionService, ossUtil);
+    ossOrder.verify(deletionService).deleteBlog(1L);
+    ossOrder.verify(ossUtil).delete("blog/cover.png");
+  }
 
-      assertEquals(200, result.getCode(), coverUrl);
-      verify(ossUtil, never()).deleteByPublicUrl(anyString());
-    }
+  @Test
+  void deleteWithNoCoverTouchesNoOssObject() {
+    when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 1));
+    when(blogMediaMapper.selectByBlogId(1L)).thenReturn(List.of());
+    when(deletionService.deleteBlog(1L)).thenReturn(1);
+
+    assertEquals(200, service().delete(1L).getCode());
+    verify(ossUtil, never()).delete(anyString());
+  }
+
+  @Test
+  void deleteSkipsAnObjectKeyThatIsNotInTheBlogPrefix() {
+    when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 1));
+    BlogMedia hijacked = media(1L, COVER_URL, 9L, 1L);
+    hijacked.setObjectKey("imgs/photo.jpg");
+    when(blogMediaMapper.selectByBlogId(1L)).thenReturn(List.of(hijacked));
+    when(deletionService.deleteBlog(1L)).thenReturn(1);
+
+    // 兜底：删的是 gallery 目录的对象，跳过而不是删掉
+    assertEquals(200, service().delete(1L).getCode());
+    verify(ossUtil, never()).delete(anyString());
   }
 
   @Test
   void deleteRecordsAFailedCleanupInsteadOfReportingSuccess() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
-    stubBlogPrefix();
-    stubObjectKeyOf();
-    Blog stored = blog(1L, 9L, 1);
-    stored.setCoverImage("https://bucket.example.test/blog/cover.png");
-    when(blogMapper.selectById(1L)).thenReturn(stored);
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 1));
+    when(blogMediaMapper.selectByBlogId(1L)).thenReturn(List.of(media(1L, COVER_URL, 9L, 1L)));
     when(deletionService.deleteBlog(1L)).thenReturn(1);
-    org.mockito.Mockito.doThrow(new RuntimeException("OSS 不可达"))
-        .when(ossUtil).deleteByPublicUrl(anyString());
+    doThrow(new RuntimeException("OSS 不可达")).when(ossUtil).delete(anyString());
 
     Result<String> result = service().delete(1L);
 
     assertEquals(500, result.getCode());
-    verify(ossCleanupRecordService).recordFailure(eq("https://bucket.example.test/blog/cover.png"),
-        eq("删除博客时 OSS 对象清理失败"));
+    verify(ossCleanupRecordService).recordFailure(eq(COVER_URL), eq("删除博客时 OSS 对象清理失败"));
   }
 
   @Test
   void deleteOnLostRaceReportsMissingAndTouchesNoOssObject() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
     when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 1));
-    // 幂等：并发重复删除时后一个请求拿到的行数会是 0
     when(deletionService.deleteBlog(1L)).thenReturn(0);
 
     Result<String> result = service().delete(1L);
 
     assertEquals(404, result.getCode());
     assertEquals("文章不存在", result.getMsg());
-    verify(ossUtil, never()).deleteByPublicUrl(anyString());
+    verify(ossUtil, never()).delete(anyString());
   }
 }

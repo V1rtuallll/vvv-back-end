@@ -20,6 +20,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 
+import com.v1rtual.vvv_backend.entity.Blog;
 import com.v1rtual.vvv_backend.entity.Comment;
 import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.mapper.BlogMapper;
@@ -245,8 +246,18 @@ class BlogQueryServiceTest {
     return c;
   }
 
+  /** 已发布的文章：评论可见性闸放行的基准情形。 */
+  private void stubBlog(long id, long authorId, Integer status) {
+    Blog blog = new Blog();
+    blog.setId(id);
+    blog.setAuthorId(authorId);
+    blog.setStatus(status);
+    when(blogMapper.selectById(id)).thenReturn(blog);
+  }
+
   @Test
   void commentsAreDelegatedToTheBlogVariantOfTheMapper() {
+    stubBlog(1L, 9L, 1);
     when(commentMapper.selectBlogCommentByTargetId(1L)).thenReturn(List.of(comment(3L, 0L)));
 
     Result<List<Comment>> result = service().comments(1L, user(9L, "someone"));
@@ -257,6 +268,7 @@ class BlogQueryServiceTest {
 
   @Test
   void commentsMarkTheCurrentUsersLikesAndLeaveTheRestUnliked() {
+    stubBlog(1L, 9L, 1);
     when(commentMapper.selectBlogCommentByTargetId(1L))
         .thenReturn(List.of(comment(3L, 2L), comment(4L, 0L)));
     when(commentLikeMapper.selectCommentIdsByUserId(9L, List.of(3L, 4L))).thenReturn(List.of(3L));
@@ -269,6 +281,7 @@ class BlogQueryServiceTest {
 
   @Test
   void commentsDefaultLikesToZeroAndAreNotLikedForAnonymousVisitors() {
+    stubBlog(1L, 9L, 1);
     when(commentMapper.selectBlogCommentByTargetId(1L)).thenReturn(List.of(comment(3L, null)));
 
     Result<List<Comment>> result = service().comments(1L, null);
@@ -281,6 +294,7 @@ class BlogQueryServiceTest {
 
   @Test
   void commentsOnAnEmptyThreadReturnAnEmptyListAndQueryNoLikes() {
+    stubBlog(1L, 9L, 1);
     when(commentMapper.selectBlogCommentByTargetId(1L)).thenReturn(List.of());
 
     Result<List<Comment>> result = service().comments(1L, user(9L, "someone"));
@@ -292,12 +306,68 @@ class BlogQueryServiceTest {
   }
 
   @Test
+  void commentsOnAMissingPostReturn404() {
+    when(blogMapper.selectById(404L)).thenReturn(null);
+
+    Result<List<Comment>> result = service().comments(404L, user(9L, "someone"));
+
+    assertEquals(404, result.getCode());
+    assertEquals("文章不存在", result.getMsg());
+    verify(commentMapper, never()).selectBlogCommentByTargetId(anyLong());
+  }
+
+  @Test
+  void commentsOnADraftAreHiddenFromAnonymousVisitors() {
+    stubBlog(1L, 9L, 0);
+
+    Result<List<Comment>> result = service().comments(1L, null);
+
+    assertEquals(403, result.getCode());
+    verify(commentMapper, never()).selectBlogCommentByTargetId(anyLong());
+  }
+
+  @Test
+  void commentsOnADraftAreHiddenFromOtherLoggedInUsers() {
+    stubBlog(1L, 9L, 0);
+
+    Result<List<Comment>> result = service().comments(1L, user(77L, "stranger"));
+
+    assertEquals(403, result.getCode());
+    verify(commentMapper, never()).selectBlogCommentByTargetId(anyLong());
+  }
+
+  @Test
+  void commentsOnADraftAreVisibleToItsAuthor() {
+    stubBlog(1L, 9L, 0);
+    when(commentMapper.selectBlogCommentByTargetId(1L)).thenReturn(List.of(comment(3L, 0L)));
+
+    Result<List<Comment>> result = service().comments(1L, user(9L, "someone"));
+
+    assertEquals(200, result.getCode());
+    assertEquals(1, result.getData().size());
+  }
+
+  @Test
+  void commentsOnADraftAreVisibleToTheSiteOwner() {
+    stubBlog(1L, 9L, 0);
+    when(ownerAccess.isOwner(any(User.class))).thenReturn(true);
+    when(commentMapper.selectBlogCommentByTargetId(1L)).thenReturn(List.of(comment(3L, 0L)));
+
+    Result<List<Comment>> result = service().comments(1L, user(77L, "V1rtual"));
+
+    assertEquals(200, result.getCode());
+    assertEquals(1, result.getData().size());
+  }
+
+  @Test
   void commentsRejectANonPositiveIdInsteadOfQuerying() {
     for (Long id : new Long[] {0L, -1L, null}) {
       Result<List<Comment>> result = service().comments(id, user(9L, "someone"));
 
       assertEquals(500, result.getCode(), "id=" + id);
     }
+    // 参数校验必须排在最前，非法 ID 不落到任何查询上
+    verify(blogMapper, never()).selectById(anyLong());
     verify(commentMapper, never()).selectBlogCommentByTargetId(anyLong());
   }
 

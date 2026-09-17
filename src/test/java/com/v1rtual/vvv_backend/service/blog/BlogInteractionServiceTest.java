@@ -22,6 +22,7 @@ import com.v1rtual.vvv_backend.mapper.BlogMapper;
 import com.v1rtual.vvv_backend.mapper.CommentLikeMapper;
 import com.v1rtual.vvv_backend.mapper.CommentMapper;
 import com.v1rtual.vvv_backend.security.CurrentUserProvider;
+import com.v1rtual.vvv_backend.security.OwnerAccess;
 import com.v1rtual.vvv_backend.vo.Result;
 
 class BlogInteractionServiceTest {
@@ -31,10 +32,11 @@ class BlogInteractionServiceTest {
   private final CommentLikeMapper commentLikeMapper = mock(CommentLikeMapper.class);
   private final BlogManageService blogManageService = mock(BlogManageService.class);
   private final CurrentUserProvider currentUserProvider = mock(CurrentUserProvider.class);
+  private final OwnerAccess ownerAccess = mock(OwnerAccess.class);
 
   private BlogInteractionService service() {
     return new BlogInteractionService(blogMapper, commentMapper, commentLikeMapper,
-        blogManageService, currentUserProvider);
+        blogManageService, currentUserProvider, ownerAccess);
   }
 
   private static User user(long id, String username) {
@@ -54,9 +56,11 @@ class BlogInteractionServiceTest {
     return c;
   }
 
-  private static Blog blog(long id) {
+  private static Blog blog(long id, long authorId, int status) {
     Blog b = new Blog();
     b.setId(id);
+    b.setAuthorId(authorId);
+    b.setStatus(status);
     return b;
   }
 
@@ -83,7 +87,7 @@ class BlogInteractionServiceTest {
   void commentStoresTheAuthorFromTheToken() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
     when(commentMapper.insertBlogComment(any(Comment.class))).thenReturn(1);
-    when(blogMapper.selectById(1L)).thenReturn(blog(1L));
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 1));
     when(commentMapper.selectById(5L)).thenReturn(comment(5L, 7L, 1L));
 
     Result<String> result = service().comment(1L, "  说点什么  ", 5L);
@@ -101,10 +105,45 @@ class BlogInteractionServiceTest {
   void commentWithNullParentIdIsAllowed() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
     when(commentMapper.insertBlogComment(any(Comment.class))).thenReturn(1);
-    when(blogMapper.selectById(1L)).thenReturn(blog(1L));
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 1));
 
     assertEquals(200, service().comment(1L, "顶层评论", null).getCode());
     verify(commentMapper).insertBlogComment(argThat(saved -> saved.getParentId() == null));
+  }
+
+  // ---------- 评论文路径的可见性闸（与 detail 同一条规则） ----------
+
+  @Test
+  void commentOnSomebodyElsesDraftIsRejected() {
+    when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(77L, "stranger")));
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 0));
+
+    Result<String> result = service().comment(1L, "内容", 5L);
+
+    assertEquals(403, result.getCode());
+    assertEquals(OwnerAccess.DENIED_MESSAGE, result.getMsg());
+    verify(commentMapper, never()).insertBlogComment(any());
+    // 闸门必须排在父评论查询之前：否则草稿的评论 ID 能被「父评论不属于当前文章」探测出来
+    verify(commentMapper, never()).selectById(anyLong());
+  }
+
+  @Test
+  void commentOnOwnDraftIsAllowed() {
+    when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 0));
+    when(commentMapper.insertBlogComment(any(Comment.class))).thenReturn(1);
+
+    assertEquals(200, service().comment(1L, "自留地里的备注", null).getCode());
+  }
+
+  @Test
+  void ownerCanCommentOnSomebodyElsesDraft() {
+    when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(77L, "V1rtual")));
+    when(ownerAccess.isOwner(any(User.class))).thenReturn(true);
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 0));
+    when(commentMapper.insertBlogComment(any(Comment.class))).thenReturn(1);
+
+    assertEquals(200, service().comment(1L, "站长的留言", null).getCode());
   }
 
   // ---------- likeComment ----------
@@ -227,7 +266,7 @@ class BlogInteractionServiceTest {
   @Test
   void commentRejectsParentFromAnotherBlog() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
-    when(blogMapper.selectById(1L)).thenReturn(blog(1L));
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 1));
     when(commentMapper.selectById(5L)).thenReturn(comment(5L, 7L, 2L));
 
     assertEquals(400, service().comment(1L, "内容", 5L).getCode());
@@ -237,7 +276,7 @@ class BlogInteractionServiceTest {
   @Test
   void commentRejectsGalleryParent() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
-    when(blogMapper.selectById(1L)).thenReturn(blog(1L));
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 1));
     Comment galleryParent = comment(5L, 7L, 1L);
     galleryParent.setTargetType(TargetType.gallery);
     when(commentMapper.selectById(5L)).thenReturn(galleryParent);

@@ -41,13 +41,20 @@ public class BlogInteractionService {
   private final CommentLikeMapper commentLikeMapper;
   private final BlogManageService blogManageService;
   private final CurrentUserProvider currentUserProvider;
+  private final OwnerAccess ownerAccess;
 
   public Result<String> comment(Long blogId, String content, Long parentId) {
     User current = currentUserProvider.getCurrentUser().orElse(null);
     if (current == null) return Result.error(401, "请先登录");
     if (!StringUtils.hasText(content)) return Result.error(400, "评论内容不能为空");
-    if (blogId == null || blogMapper.selectById(blogId) == null) {
-      return Result.error(404, "文章不存在");
+    if (blogId == null) return Result.error(404, "文章不存在");
+    Blog blog = blogMapper.selectById(blogId);
+    if (blog == null) return Result.error(404, "文章不存在");
+    // 与 detail 同一道可见性闸，且必须排在写库与父评论查询之前：
+    // 缺了它，任何登录用户都能给别人的草稿挂评论，也能靠「父评论不属于当前文章」
+    // 之类的报错探测出草稿的评论 ID。
+    if (!BlogVisibility.canSee(blog.getStatus(), blog.getAuthorId(), current, ownerAccess)) {
+      return Result.error(403, OwnerAccess.DENIED_MESSAGE);
     }
     if (parentId != null) {
       Comment parent = commentMapper.selectById(parentId);

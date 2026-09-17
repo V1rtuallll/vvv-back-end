@@ -63,7 +63,7 @@ Spring Boot 3.5.9、Java 21、MyBatis（**全部是注解 SQL，没有 XML**）�
 ```
 src/main/java/com/v1rtual/vvv_backend/
 ├── controller/       HTTP 层，含 admin/ 子包
-├── service/          业务逻辑，含 admin/ gallery/ home/ media/ user/ 子包
+├── service/          业务逻辑，含 admin/ blog/ gallery/ home/ media/ user/ 子包
 ├── mapper/           MyBatis Mapper 接口（注解 SQL）
 ├── entity/           数据库实体
 ├── dto/              入参对象（LoginDTO、RegisterDTO）
@@ -204,6 +204,7 @@ ssh <生产主机> 'sudo /usr/local/sbin/v1rtual-deploy-backend <旧revision>'
   `UploadValidator` 会把这个值当作上限来校验，所以"按配置值提示用户"意味着提示 20GB。
 - `CommentMapper.insert` 的 SQL 里 `target_type` **硬编码为 `'gallery'`**，
   传 `#{targetType}` 不起作用。
+  博客版是**平行新增**的另一组方法（`insertBlogComment` 等），不共用这一条。
 
 ## 不许做的事
 

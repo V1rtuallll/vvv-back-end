@@ -4,7 +4,7 @@
 --
 -- 做了什么
 -- --------
---   新建 blog_media 表，登记每一个经 /api/blog/upload 上传的 OSS 对象：
+--   新建 blog_media 表，登记每一个经 POST /api/blog/upload-media 上传的 OSS 对象：
 --   公开地址、对象键、上传者、以及它当前被哪一篇文章占用。
 --
 -- 为什么

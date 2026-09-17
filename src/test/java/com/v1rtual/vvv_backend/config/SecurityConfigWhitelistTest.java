@@ -3,6 +3,7 @@ package com.v1rtual.vvv_backend.config;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
@@ -123,6 +124,9 @@ class SecurityConfigWhitelistTest {
 
   // ---------- 读过滤器链：都是 Spring Security 没有公开的读取方式的部分 ----------
 
+  /** 沿 delegate 最多走这么多层。正常只有一两层，超过就是装饰链的形状变了或成环。 */
+  private static final int MAX_DELEGATE_HOPS = 8;
+
   private List<RequestMatcherEntry<AuthorizationManager<RequestAuthorizationContext>>> mappings()
       throws ReflectiveOperationException {
     AuthorizationFilter filter = null;
@@ -131,15 +135,25 @@ class SecurityConfigWhitelistTest {
     }
     assertNotNull(filter, "过滤器链里没有 AuthorizationFilter，鉴权没有生效");
 
-    // 链上的管理器外面包了一层观测装饰器，映射表在被它委托的那一个上
+    // 链上的管理器外面包了一层观测装饰器，映射表在被它委托的那一个上。
+    // 层数有限且已知，这里给一个上限：delegate 成环或中途读到 null 时立刻失败并说明位置，
+    // 否则这个 while 会一直绕下去，把整个测试套件挂死而不是跑红。
     Object manager = filter.getAuthorizationManager();
-    while (!"RequestMatcherDelegatingAuthorizationManager".equals(manager.getClass().getSimpleName())) {
+    for (int hops = 0; !isMappingTable(manager); hops++) {
+      assertTrue(manager != null && hops < MAX_DELEGATE_HOPS,
+          "沿 delegate 未到达映射表（走了 " + hops + " 层）：装饰链的形状变了或 delegate 成环，当前位置 "
+              + (manager == null ? "null" : manager.getClass().getName()));
       manager = readField(manager, "delegate");
     }
     @SuppressWarnings("unchecked")
     List<RequestMatcherEntry<AuthorizationManager<RequestAuthorizationContext>>> mappings =
         (List<RequestMatcherEntry<AuthorizationManager<RequestAuthorizationContext>>>) readField(manager, "mappings");
     return mappings;
+  }
+
+  private static boolean isMappingTable(Object manager) {
+    return manager != null
+        && "RequestMatcherDelegatingAuthorizationManager".equals(manager.getClass().getSimpleName());
   }
 
   /** 未登录（无 Authentication）时是否放行。 */

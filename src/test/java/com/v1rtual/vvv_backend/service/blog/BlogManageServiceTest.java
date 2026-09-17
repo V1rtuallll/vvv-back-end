@@ -341,9 +341,13 @@ class BlogManageServiceTest {
     verify(blogMediaMapper).bindToBlogByUrl(COVER_URL, 1L);
   }
 
-  /** 「本篇已持有」只豁免本篇：别人的上传、绑在别篇上的封面依旧拒绝。 */
+  /**
+   * 「本篇已持有」的豁免只认本篇：别人的上传在这里由上传者判定拒掉（403），
+   * 与它是否还绑在别篇上无关 —— 占用分支的 409 由上一个用例
+   * {@link #updateRejectsACoverAlreadyUsedByAnotherPost()} 钉住。
+   */
   @Test
-  void updateStillRejectsACoverUploadedBySomebodyElseAndHeldByAnotherPost() {
+  void updateRejectsACoverUploadedBySomebodyElseEvenWhenAnotherPostHoldsIt() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
     when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 1));
     // 上传者是 owner，且这张封面正绑在文章 7 上

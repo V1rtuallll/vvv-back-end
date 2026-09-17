@@ -38,6 +38,7 @@ import com.v1rtual.vvv_backend.util.OssUtil;
 class ResourceSyncServiceTest {
 
   private static final String BLOG_OBJECT_URL = "https://bucket.example.test/blog/cover.png";
+  private static final String IMGS_OBJECT_URL = "https://bucket.example.test/imgs/a.png";
 
   private final OssUtil ossUtil = mock(OssUtil.class);
   private final VideoMapper videoMapper = mock(VideoMapper.class);
@@ -110,19 +111,30 @@ class ResourceSyncServiceTest {
   /**
    * blog 对象一个都不许进类型表。
    *
-   * 桩故意让 blog/ 下有可同步的对象：一旦将来有人给 blog 接上目录与类型表，
-   * 插入就真的会发生，这个用例随之变红，而不是因为「桶里没东西」而空转通过。
+   * 两个目录的桩都真的列出对象：blog/ 下一份，gallery 的 imgs/ 下一份 ——
+   * 无论把 blog 接到其中哪一个目录并插入，这些对象都会真的落进类型表，
+   * 下面的 never 断言随之变红，而不是因为「桶里没东西」空转通过。
+   *
+   * imgs/ 的那一份在正常同步里会被 photo 插入，所以先跑一遍完整同步把它消费掉，
+   * 再清空调用记录，只盯 blog 相关的类型名。
    */
   @Test
   void blogObjectsNeverReachTheGalleryTypeTables() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.empty());
     when(ossUtil.listAllPublicUrls(OssUtil.FileType.BLOG.getPath()))
         .thenReturn(List.of(BLOG_OBJECT_URL));
+    when(ossUtil.listAllPublicUrls(OssUtil.FileType.IMGS.getPath()))
+        .thenReturn(List.of(IMGS_OBJECT_URL));
 
+    // 正常路径：imgs/ 的对象属于 photo，插入类型表是应有行为
     service().syncOssToDatabase(everyFileTypeAsASyncType());
+    clearInvocations(ossUtil, photoMapper, gifMapper, videoMapper, musicMapper);
+
     service().syncOssToDatabase(List.of("blog", OssUtil.FileType.BLOG.getPath(), "BLOG"));
 
+    // 既不该去扫任何目录，也不该往任何类型表插入
     verify(ossUtil, never()).listAllPublicUrls(OssUtil.FileType.BLOG.getPath());
+    verify(ossUtil, never()).listAllPublicUrls(OssUtil.FileType.IMGS.getPath());
     verify(photoMapper, never()).insertBatch(any());
     verify(gifMapper, never()).insertBatch(any());
     verify(videoMapper, never()).insertBatch(any());

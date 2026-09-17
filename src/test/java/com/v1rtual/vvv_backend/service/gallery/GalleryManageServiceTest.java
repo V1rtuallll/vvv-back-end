@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import com.v1rtual.vvv_backend.entity.Comment;
 import com.v1rtual.vvv_backend.entity.Gallery;
 import com.v1rtual.vvv_backend.entity.ResourceType;
+import com.v1rtual.vvv_backend.entity.TargetType;
 import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.mapper.CommentMapper;
 import com.v1rtual.vvv_backend.mapper.GalleryMapper;
@@ -60,6 +61,7 @@ class GalleryManageServiceTest {
     comment.setId(id);
     comment.setUserId(ownerId);
     comment.setContent("内容");
+    comment.setTargetType(TargetType.gallery);
     return comment;
   }
 
@@ -228,6 +230,25 @@ class GalleryManageServiceTest {
 
     assertEquals(404, result.getCode());
     assertNull(result.getData());
+    verify(deletionService, never()).deleteComment(any());
+  }
+
+  /**
+   * comment 表为 gallery 与 blog 共用，两边主键都从 1 自增，必然撞号。
+   * 这个端点的评论 ID 必须限定在 gallery 内，否则会顺着 parent_id 删掉博客评论的整棵回复树。
+   */
+  @Test
+  void rejectsDeletingABlogCommentEvenForItsOwnAuthorOrTheOwner() {
+    Comment blogComment = comment(5L, 100L);
+    blogComment.setTargetType(TargetType.blog);
+    when(commentMapper.selectById(5L)).thenReturn(blogComment);
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+
+    assertEquals(404, service().deleteComment(5L, user(100L, "作者")).getCode());
+
+    when(ownerAccess.isOwner(any())).thenReturn(true);
+    assertEquals(404, service().deleteComment(5L, user(999L, "V1rtual")).getCode());
+
     verify(deletionService, never()).deleteComment(any());
   }
   // ===== 撤销上传（前端中途取消时调用）=====

@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 
 import com.v1rtual.vvv_backend.entity.Comment;
 import com.v1rtual.vvv_backend.entity.Gallery;
+import com.v1rtual.vvv_backend.entity.TargetType;
 import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.mapper.CommentMapper;
 import com.v1rtual.vvv_backend.mapper.GalleryMapper;
@@ -97,6 +98,10 @@ public class GalleryManageService {
 
     Comment comment = commentMapper.selectById(commentId);
     if (comment == null) return Result.error(404, "评论不存在");
+    // 与 likeComment 同一道闸：selectById 不区分 target_type，而 comment 表为 gallery 与
+    // blog 共用、两边主键都从 1 自增，必然撞号。少了这一句，这个端点能顺着 parent_id
+    // 删掉博客评论的整棵回复树。
+    if (comment.getTargetType() != TargetType.gallery) return Result.error(404, "评论不存在");
     if (!canManage(comment.getUserId(), currentUser)) return Result.error(403, OwnerAccess.DENIED_MESSAGE);
 
     deletionService.deleteComment(commentId);

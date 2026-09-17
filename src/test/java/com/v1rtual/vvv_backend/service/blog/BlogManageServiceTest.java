@@ -321,6 +321,40 @@ class BlogManageServiceTest {
     assertEquals(200, service().update(1L, body("改后", "正文", COVER_URL, 1)).getCode());
   }
 
+  /**
+   * owner 代设封面之后，作者必须还能原样保存这篇文章 —— 哪怕只是改一个错别字。
+   * 登记行的上传者是 owner 而作者不是，只看 uploader_id 会把他挡在门外，
+   * 他唯一的出路就变成丢掉封面。
+   */
+  @Test
+  void updateKeepsWorkingForTheAuthorAfterTheOwnerSetTheCover() {
+    when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 1));
+    // 文章 1 当前持有的封面，登记的上传者是 owner（77），不是作者（9）
+    stubCoverRow(media(1L, COVER_URL, 77L, 1L));
+    when(blogMapper.selectWithAuthorById(1L)).thenReturn(saved(1L, "改后"));
+    when(commentMapper.countBlogCommentByTargetId(1L)).thenReturn(0);
+
+    Result<BlogDetailVO> result = service().update(1L, body("改后", "正文", COVER_URL, 1));
+
+    assertEquals(200, result.getCode());
+    verify(blogMediaMapper).bindToBlogByUrl(COVER_URL, 1L);
+  }
+
+  /** 「本篇已持有」只豁免本篇：别人的上传、绑在别篇上的封面依旧拒绝。 */
+  @Test
+  void updateStillRejectsACoverUploadedBySomebodyElseAndHeldByAnotherPost() {
+    when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 1));
+    // 上传者是 owner，且这张封面正绑在文章 7 上
+    stubCoverRow(media(1L, COVER_URL, 77L, 7L));
+
+    Result<BlogDetailVO> result = service().update(1L, body("改后", "正文", COVER_URL, 1));
+
+    assertEquals(403, result.getCode());
+    verify(blogMapper, never()).update(any());
+  }
+
   @Test
   void removingTheCoverReleasesTheRowWithoutDeletingTheObject() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));

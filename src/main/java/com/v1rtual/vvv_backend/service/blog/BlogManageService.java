@@ -200,7 +200,11 @@ public class BlogManageService {
 
     BlogMedia media = blogMediaMapper.selectByUrl(cover);
     if (media == null) return Result.error(400, "封面必须是博客上传接口返回的地址");
-    if (!ownerAccess.isOwner(current) && !current.getId().equals(media.getUploaderId())) {
+    // 封面已经属于正在编辑的这一篇时不再看上传者：那是这篇文章当前就持有的封面，
+    // owner 代设过之后作者仍要能原样保存，否则作者会被自己的文章锁在门外。
+    boolean alreadyHeldByThisPost = blogId != null && blogId.equals(media.getBlogId());
+    if (!alreadyHeldByThisPost && !ownerAccess.isOwner(current)
+        && !current.getId().equals(media.getUploaderId())) {
       return Result.error(403, OwnerAccess.DENIED_MESSAGE);
     }
     if (media.getBlogId() != null && !media.getBlogId().equals(blogId)) {

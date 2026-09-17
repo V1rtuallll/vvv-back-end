@@ -353,6 +353,29 @@ class BlogManageServiceTest {
     verify(ossUtil, never()).deleteByPublicUrl(anyString());
   }
 
+  /**
+   * 本任务的核心性质：删除目标**永远不来自** blog.cover_image 这个列。
+   *
+   * 这一条是回归闸。此前判定归属靠比对地址字符串的形状，只要形状对就放行，
+   * 于是任何登录用户照着别人的地址原样写一遍就能删掉别人的对象。若将来有人把
+   * 「从 cover_image 解析对象键」写回来，这个用例必须变红。
+   */
+  @Test
+  void theDeleteTargetNeverComesFromTheStoredCoverUrl() {
+    when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
+    Blog stored = blog(1L, 9L, 1);
+    // 形状完全合法的地址，但登记表里没有对应的行（别人上传的对象）
+    stored.setCoverImage("https://bucket.example.test/blog/somebody-elses.png");
+    when(blogMapper.selectById(1L)).thenReturn(stored);
+    when(blogMediaMapper.selectByBlogId(1L)).thenReturn(List.of());
+    when(deletionService.deleteBlog(1L)).thenReturn(1);
+
+    assertEquals(200, service().delete(1L).getCode());
+
+    verify(ossUtil, never()).delete(anyString());
+    verify(ossUtil, never()).deleteByPublicUrl(anyString());
+  }
+
   @Test
   void deleteReadsTheObjectKeysBeforeTheRowsAreDeleted() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));

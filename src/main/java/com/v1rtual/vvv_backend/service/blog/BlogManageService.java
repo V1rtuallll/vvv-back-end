@@ -224,9 +224,8 @@ public class BlogManageService {
    * 清理一个已登记封面的 OSS 对象。
    *
    * 对象键取自 blog_media 行、**不从地址解析**：解析会把主机名丢掉，于是
-   * 「别人的域名 + 我们的路径」就能删掉本桶的对象。键一旦不是 blog/ 开头，
-   * 就一定不是本功能上传的东西 —— 这是全仓库唯一一处由外部输入触发的删除调用，
-   * 多一道前缀检查作为兜底。
+   * 「别人的域名 + 我们的路径」就能删掉本桶的对象。删除目标因此不再来自请求，
+   * 只能来自登记表 —— 前缀检查是第二道闸，防的是登记行本身被写脏，不是请求。
    */
   private boolean deleteCoverObject(BlogMedia media) {
     String objectKey = media.getObjectKey();

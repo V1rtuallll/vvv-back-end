@@ -64,7 +64,10 @@ class BlogMediaMapperContractTest {
       throws NoSuchMethodException {
     Method method = BlogMediaMapper.class.getMethod(name, parameterTypes);
     for (Class<?> type : List.of(Select.class, Insert.class, Update.class, Delete.class)) {
-      if (method.getAnnotation((Class<java.lang.annotation.Annotation>) type) != null) return type;
+      @SuppressWarnings("unchecked")
+      java.lang.annotation.Annotation annotation =
+          method.getAnnotation((Class<java.lang.annotation.Annotation>) type);
+      if (annotation != null) return type;
     }
     throw new IllegalStateException(name + " 上没有 SQL 注解");
   }

@@ -160,6 +160,7 @@ class BlogInteractionServiceTest {
   void likeCommentIncrementsTheCounterWhenTheRowIsNew() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
     when(commentMapper.selectById(3L)).thenReturn(comment(3L, 9L, 1L));
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 1));
     when(commentLikeMapper.insert(9L, 3L)).thenReturn(1);
 
     Result<String> result = service().likeComment(3L);
@@ -173,6 +174,7 @@ class BlogInteractionServiceTest {
   void likeCommentOnAnAlreadyLikedCommentReturnsConflict() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
     when(commentMapper.selectById(3L)).thenReturn(comment(3L, 9L, 1L));
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 1));
     when(commentLikeMapper.insert(9L, 3L)).thenReturn(0);
 
     Result<String> result = service().likeComment(3L);
@@ -192,12 +194,41 @@ class BlogInteractionServiceTest {
     verify(commentLikeMapper, never()).insert(anyLong(), anyLong());
   }
 
+  // ---------- 点赞的可见性闸：看不到的文章，它的评论也不能点赞 ----------
+
+  @Test
+  void likeCommentOnACommentUnderSomebodyElsesDraftIsRejected() {
+    when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(77L, "stranger")));
+    when(commentMapper.selectById(3L)).thenReturn(comment(3L, 9L, 1L));
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 0));
+    // 桩让缺失闸门时这一支会真的落库：点赞行写入成功，点赞数随之递增
+    when(commentLikeMapper.insert(77L, 3L)).thenReturn(1);
+
+    Result<String> result = service().likeComment(3L);
+
+    assertEquals(403, result.getCode());
+    assertEquals(OwnerAccess.DENIED_MESSAGE, result.getMsg());
+    verify(commentLikeMapper, never()).insert(anyLong(), anyLong());
+    verify(commentMapper, never()).incrementLikeCount(anyLong());
+  }
+
+  @Test
+  void likeCommentOnACommentUnderOwnDraftIsAllowed() {
+    when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
+    when(commentMapper.selectById(3L)).thenReturn(comment(3L, 9L, 1L));
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 0));
+    when(commentLikeMapper.insert(9L, 3L)).thenReturn(1);
+
+    assertEquals(200, service().likeComment(3L).getCode());
+  }
+
   // ---------- deleteComment ----------
 
   @Test
   void commentAuthorCanDeleteOwnCommentAndItsReplies() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
     when(commentMapper.selectById(3L)).thenReturn(comment(3L, 9L, 1L));
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 1));
     when(commentMapper.selectIdsByParentIds(List.of(3L))).thenReturn(List.of(4L, 5L));
 
     Result<String> result = service().deleteComment(3L);
@@ -211,8 +242,7 @@ class BlogInteractionServiceTest {
   void blogAuthorCanDeleteSomeoneElsesCommentOnTheirPostIncludingNestedReplies() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(42L, "owner-of-post")));
     when(commentMapper.selectById(3L)).thenReturn(comment(3L, 9L, 1L));
-    // 用 any() 而非 any(Class)：loadBlog 查出来的对象可能是 null，
-    // 而 Mockito 2 起 any(Class) 不匹配 null
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 42L, 1));
     when(blogManageService.canManage(any(), any())).thenReturn(true);
     // 回复的回复也要一起删：BFS 不能只走一层
     when(commentMapper.selectIdsByParentIds(List.of(3L))).thenReturn(List.of(4L));
@@ -227,6 +257,7 @@ class BlogInteractionServiceTest {
   void commentWithoutRepliesDeletesOnlyItself() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
     when(commentMapper.selectById(3L)).thenReturn(comment(3L, 9L, 1L));
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 1));
 
     assertEquals(200, service().deleteComment(3L).getCode());
     verify(commentLikeMapper).deleteByCommentIds(List.of(3L));
@@ -237,11 +268,56 @@ class BlogInteractionServiceTest {
   void strangerCannotDeleteAComment() {
     when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(77L, "stranger")));
     when(commentMapper.selectById(3L)).thenReturn(comment(3L, 9L, 1L));
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 9L, 1));
     when(blogManageService.canManage(any(), any())).thenReturn(false);
 
     assertEquals(403, service().deleteComment(3L).getCode());
     verify(commentMapper, never()).deleteByIds(any());
     verify(commentLikeMapper, never()).deleteByCommentIds(any());
+  }
+
+  // ---------- 删除的可见性闸：守在删除权限判定之前 ----------
+
+  @Test
+  void deleteCommentOnACommentUnderSomebodyElsesDraftIsRejected() {
+    when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(77L, "stranger")));
+    when(commentMapper.selectById(3L)).thenReturn(comment(3L, 9L, 1L));
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 7L, 0));
+
+    Result<String> result = service().deleteComment(3L);
+
+    assertEquals(403, result.getCode());
+    assertEquals(OwnerAccess.DENIED_MESSAGE, result.getMsg());
+    // 闸门必须排在删除权限判定之前：否则草稿的评论只能靠「谁有权限删」的差别间接挡下来
+    verify(blogManageService, never()).canManage(any(), any());
+    verify(commentMapper, never()).deleteByIds(any());
+    verify(commentLikeMapper, never()).deleteByCommentIds(any());
+  }
+
+  @Test
+  void commentAuthorCannotDeleteOwnCommentUnderSomebodyElsesDraft() {
+    when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(9L, "someone")));
+    when(commentMapper.selectById(3L)).thenReturn(comment(3L, 9L, 1L));
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 7L, 0));
+
+    Result<String> result = service().deleteComment(3L);
+
+    // 缺了闸门，评论作者这一支直接判为可删，草稿下的评论就被删掉了
+    assertEquals(403, result.getCode());
+    assertEquals(OwnerAccess.DENIED_MESSAGE, result.getMsg());
+    verify(commentMapper, never()).deleteByIds(any());
+    verify(commentLikeMapper, never()).deleteByCommentIds(any());
+  }
+
+  @Test
+  void blogAuthorCanDeleteACommentUnderTheirOwnDraft() {
+    when(currentUserProvider.getCurrentUser()).thenReturn(Optional.of(user(42L, "owner-of-post")));
+    when(commentMapper.selectById(3L)).thenReturn(comment(3L, 9L, 1L));
+    when(blogMapper.selectById(1L)).thenReturn(blog(1L, 42L, 0));
+    when(blogManageService.canManage(any(), any())).thenReturn(true);
+
+    assertEquals(200, service().deleteComment(3L).getCode());
+    verify(commentMapper).deleteByIds(List.of(3L));
   }
 
   @Test

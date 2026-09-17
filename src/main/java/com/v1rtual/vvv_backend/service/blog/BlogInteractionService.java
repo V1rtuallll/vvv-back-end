@@ -96,6 +96,13 @@ public class BlogInteractionService {
     // selectById 不带 target_type 过滤，必须在这里把范围收窄到博客，
     // 否则拿 gallery 评论的 ID 也能从这个端点改到它的点赞
     if (stored.getTargetType() != TargetType.blog) return Result.error(404, "评论不存在");
+    // 与 comment / detail 同一道草稿可见性闸。缺了它，任何登录用户都能给别人的
+    // 草稿评论落一条点赞记录，而那条评论在任何读路径上都看不到。
+    Blog blog = blogMapper.selectById(stored.getTargetId());
+    if (blog == null
+        || !BlogVisibility.canSee(blog.getStatus(), blog.getAuthorId(), current, ownerAccess)) {
+      return Result.error(403, OwnerAccess.DENIED_MESSAGE);
+    }
 
     if (commentLikeMapper.insert(current.getId(), commentId) == 0) {
       return Result.error(409, "不能重复点赞");
@@ -105,7 +112,7 @@ public class BlogInteractionService {
   }
 
   /**
-   * 评论作者本人、文章作者或站点 owner 都可以删。
+   * 评论作者本人、文章作者或站点 owner 都可以删，前提是这篇文章对操作者可见。
    *
    * 删除整棵回复树而不只是这一个节点：回复沿用根评论的 target_id，
    * 只删父评论会让子评论的 parent_id 指向一条已不存在的评论，
@@ -125,7 +132,16 @@ public class BlogInteractionService {
     // 别人在 gallery 里的评论 —— loadBlog 会把 gallery 的 targetId 当成 blogId 去查。
     if (stored.getTargetType() != TargetType.blog) return Result.error(404, "评论不存在");
 
-    if (!canDeleteComment(stored, current)) {
+    // 与 comment / detail 同一道草稿可见性闸，排在删除权限判定之前：
+    // 看不到的文章，它的评论也不能动 —— 少了它，评论作者仍能删掉自己在别人草稿下的评论。
+    // 文章行缺失（数据异常）时同样按不可见处理。
+    Blog blog = loadBlog(stored.getTargetId());
+    if (blog == null
+        || !BlogVisibility.canSee(blog.getStatus(), blog.getAuthorId(), current, ownerAccess)) {
+      return Result.error(403, OwnerAccess.DENIED_MESSAGE);
+    }
+
+    if (!canDeleteComment(stored, blog, current)) {
       return Result.error(403, OwnerAccess.DENIED_MESSAGE);
     }
 
@@ -167,13 +183,14 @@ public class BlogInteractionService {
     return collected;
   }
 
-  private boolean canDeleteComment(Comment stored, User current) {
+  /** 文章由调用方查好传进来：可见性闸与权限判定共用同一次查询。 */
+  private boolean canDeleteComment(Comment stored, Blog blog, User current) {
     if (stored.getUserId() != null && stored.getUserId().equals(current.getId())) return true;
-    return blogManageService.canManage(loadBlog(stored.getTargetId()), current);
+    return blogManageService.canManage(blog, current);
   }
 
   /**
-   * 这里只需要文章的作者字段。注入 BlogMapper 而不是 BlogQueryService，
+   * 这里只需要文章的作者与状态字段。注入 BlogMapper 而不是 BlogQueryService，
    * 是为了避免与查询服务形成循环依赖。
    */
   private Blog loadBlog(Long blogId) {

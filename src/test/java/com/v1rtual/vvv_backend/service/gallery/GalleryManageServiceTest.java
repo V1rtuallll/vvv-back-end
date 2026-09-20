@@ -44,9 +44,17 @@ class GalleryManageServiceTest {
   private final OwnerAccess ownerAccess = mock(OwnerAccess.class);
   private final GalleryBgmResolver bgmResolver = mock(GalleryBgmResolver.class);
 
+  /**
+   * 用真的守卫包同一个 galleryMapper 桩，而不是再 mock 一层。
+   *
+   * 下面几条删除保护的用例断言的是 `galleryMapper.countByBgmSrc` 被查到、以及在哪个时刻被查，
+   * 换成 mock 的话这些断言就都变成在验 mock 自己的行为了。
+   */
+  private final GalleryBgmUsageGuard bgmUsageGuard = new GalleryBgmUsageGuard(galleryMapper);
+
   private GalleryManageService service() {
     return new GalleryManageService(galleryMapper, commentMapper, deletionService,
-        cleanupRecordService, ossUtil, ownerAccess, bgmResolver);
+        cleanupRecordService, ossUtil, ownerAccess, bgmResolver, bgmUsageGuard);
   }
 
   private static User user(Long id, String name) {

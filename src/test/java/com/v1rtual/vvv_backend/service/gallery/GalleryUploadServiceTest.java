@@ -2,6 +2,7 @@ package com.v1rtual.vvv_backend.service.gallery;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
@@ -46,6 +47,12 @@ class GalleryUploadServiceTest {
   private final OssUtil ossUtil = mock(OssUtil.class);
   private final GalleryMapper galleryMapper = mock(GalleryMapper.class);
   private final PhotoMapper photoMapper = mock(PhotoMapper.class);
+  /**
+   * music 的类型表也做成字段（原来是在工厂里现 mock 的）：替换 music 项的用例要桩住
+   * 类型表的 src 更新，并断言它没被动过。桩成能成功，守卫即使被挪到后面，流程也会一路
+   * 跑到返回结果 —— 用例红的才是「旧对象已经被删掉」，而不是半路撞上一个没桩的 mock。
+   */
+  private final MusicMapper musicMapper = mock(MusicMapper.class);
   private final OssCleanupRecordService cleanupRecordService = mock(OssCleanupRecordService.class);
   private final MultipartProperties multipartProperties = new MultipartProperties();
   private final OwnerAccess ownerAccess = mock(OwnerAccess.class);
@@ -65,11 +72,14 @@ class GalleryUploadServiceTest {
     return resolver;
   }
 
+  /** 用真的守卫包同一个 galleryMapper 桩：它会查到桩上，替换路径的用例不必再 mock 一层。 */
+  private final GalleryBgmUsageGuard bgmUsageGuard = new GalleryBgmUsageGuard(galleryMapper);
+
   private GalleryUploadService service() {
     return new GalleryUploadService(ossUtil, galleryMapper, photoMapper, mock(GifMapper.class),
-        mock(VideoMapper.class), mock(MusicMapper.class),
+        mock(VideoMapper.class), musicMapper,
         new UploadValidator(multipartProperties), cleanupRecordService, multipartProperties,
-        ownerAccess, galleryBgmMediaMapper, bgmResolver);
+        ownerAccess, galleryBgmMediaMapper, bgmResolver, bgmUsageGuard);
   }
 
   private static MockMultipartFile png() {
@@ -454,5 +464,63 @@ class GalleryUploadServiceTest {
 
     assertEquals(200, result.getCode());
     verify(cleanupRecordService).recordFailure(contains("old.png"), anyString());
+  }
+
+  // ===== 替换保护：别把别人正在用的曲子换掉 =====
+
+  private static Gallery existingMusic() {
+    return Gallery.builder().id(7L).type(ResourceType.music).title("旧曲子")
+        .src("https://example.test/music/old.mp3").userId(1L).build();
+  }
+
+  /**
+   * 换掉一条正被别人配成背景音乐的项的文件时必须拒绝。
+   *
+   * 拒绝只是表面，这条用例真正要钉住的是「拒绝的时候**什么都没发生**」：
+   * 新文件没上传、gallery 的 src 没改、旧对象没删。删了的话，配了它的那些图
+   * 从那一刻起静默静音 —— 页面不报错，也没有任何地方记一笔。
+   *
+   * 用 music 项而不是 photo 项：只有 music / video 的地址才可能被人挑成背景音乐
+   *（resolver 规则 4 只放行 music/ 与 video/ 目录），照片地址被当 BGM 是到不了的状态。
+   */
+  @Test
+  void replaceRefusesWhenTheOldObjectIsUsedAsBackgroundMusic() throws Exception {
+    when(galleryMapper.selectById(7L)).thenReturn(existingMusic());
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    when(galleryMapper.countByBgmSrc("https://example.test/music/old.mp3")).thenReturn(2L);
+    // 下面三行把「一次成功的替换」整条路都桩通（桩不会计入调用次数，never() 断言不受影响）。
+    // 桩通是为了变异实验：守卫一旦被挪到删除之后，流程会一路跑到返回，用例红的就落在
+    // 「新文件没上传、src 没改、旧对象没删」这几条断言上，而不是半路撞上一个没桩的 mock。
+    when(ossUtil.upload(any(), any())).thenReturn("https://example.test/music/new.mp3");
+    when(galleryMapper.updateSrc(7L, "https://example.test/music/new.mp3")).thenReturn(1);
+    when(musicMapper.updateSrcBySrc(anyString(), anyString())).thenReturn(1);
+
+    Result<UploadResultVO> result = service().replaceFile(7L, mp3(), member());
+
+    assertEquals(409, result.getCode());
+    assertTrue(result.getMsg().contains("2"),
+        "拒绝理由要说清被几张图占用，实际是：" + result.getMsg());
+    verify(ossUtil, never()).upload(any(), any());
+    verify(galleryMapper, never()).updateSrc(any(), anyString());
+    verify(musicMapper, never()).updateSrcBySrc(anyString(), anyString());
+    verify(ossUtil, never()).deleteByPublicUrl(anyString());
+  }
+
+  /** 没人在用这个地址时照常替换，别把普通替换也卡住 */
+  @Test
+  void replaceSucceedsWhenNothingUsesTheOldObjectAsBackgroundMusic() throws Exception {
+    when(galleryMapper.selectById(7L)).thenReturn(existingPhoto());
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    when(galleryMapper.countByBgmSrc("https://example.test/imgs/old.png")).thenReturn(0L);
+    when(ossUtil.upload(any(), any())).thenReturn("https://example.test/imgs/new.png");
+    when(galleryMapper.updateSrc(7L, "https://example.test/imgs/new.png")).thenReturn(1);
+    when(photoMapper.updateSrcBySrc(anyString(), anyString())).thenReturn(1);
+
+    Result<UploadResultVO> result = service().replaceFile(7L, png(), member());
+
+    assertEquals(200, result.getCode());
+    // 守卫确实被问过一次再放行，不是「碰巧没拦」
+    verify(galleryMapper).countByBgmSrc("https://example.test/imgs/old.png");
+    verify(ossUtil).deleteByPublicUrl("https://example.test/imgs/old.png");
   }
 }

@@ -68,6 +68,7 @@ public class GalleryUploadService {
   private final OwnerAccess ownerAccess;
   private final GalleryBgmMediaMapper galleryBgmMediaMapper;
   private final GalleryBgmResolver bgmResolver;
+  private final GalleryBgmUsageGuard bgmUsageGuard;
 
   /**
    * @param clientUploadId 客户端为该文件生成的 ID，用于超时重试的服务端幂等；必传
@@ -191,6 +192,19 @@ public class GalleryUploadService {
       return Result.error(400, "新文件的类型与当前资源不一致（当前是 " + gallery.getType()
           + "），换类型请删除后重新上传");
     }
+
+    // 位置很关键：必须在传新文件、改 src、删旧对象**之前**。
+    //
+    // 换掉一条 music / video 项的文件，会把它的 OSS 对象删掉；而那个地址可能正被别的图
+    // 当作背景音乐用（BGM 存的是拷贝出来的地址，见 D2）。删掉之后那些图**静默静音**：
+    // 页面不报错，就是没声音，没有任何地方会记一笔。
+    // 放到 updateSrc 之后就晚了 —— 行已经指向新文件，调用方却收到一句「拒绝」，
+    // 看到的状态与被告知的结果对不上。
+    //
+    // 判在类型一致性检查之后：那是入参本身的问题（文件选错了），先告诉调用方换文件，
+    // 不因为这个地址恰好被引用而改成另一种答复。
+    Result<UploadResultVO> blocked = bgmUsageGuard.blockIfUsedAsBgm(gallery.getSrc());
+    if (blocked != null) return blocked;
 
     String oldSrc = gallery.getSrc();
     String newUrl = null;

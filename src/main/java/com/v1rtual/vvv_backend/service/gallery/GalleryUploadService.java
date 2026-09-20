@@ -104,14 +104,16 @@ public class GalleryUploadService {
     //
     // 顺序很关键：放后面的话，BGM 不合法时文件已经传上去了，还得再删一次 ——
     // 白花一次上传，而且那次清理本身也可能失败（失败会留下一个没有登记行的孤儿对象）。
-    // 两个都不带时这里是空转，不查库：新建的项本来就没有 BGM 可清。
-    GalleryBgmResolver.Bgm bgm = new GalleryBgmResolver.Bgm(null, null);
-    if (StringUtils.isNotBlank(bgmSrc) || StringUtils.isNotBlank(bgmType)) {
-      try {
-        bgm = bgmResolver.resolve(bgmSrc, bgmType, type);
-      } catch (IllegalArgumentException e) {
-        return Result.error(400, e.getMessage());
-      }
+    //
+    // 一律交给 resolver 判，这里不自己看「传没传」：
+    // 「两个都没传 = 不配 BGM」是 resolver 规则 1 的定义，判在第二处就会漂移 ——
+    // 规则改了之后这条路径照样存 null，而编辑那条会 400，正是单一取值点要避免的半挡状态。
+    // 两个都没传时 resolver 直接返回 Bgm(null, null)，不查库，代价为零。
+    GalleryBgmResolver.Bgm bgm;
+    try {
+      bgm = bgmResolver.resolve(bgmSrc, bgmType, type);
+    } catch (IllegalArgumentException e) {
+      return Result.error(400, e.getMessage());
     }
 
     String finalTitle = StringUtils.isBlank(title) ? file.getOriginalFilename() : title;

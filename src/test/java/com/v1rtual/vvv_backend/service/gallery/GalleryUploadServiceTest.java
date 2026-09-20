@@ -1,6 +1,7 @@
 package com.v1rtual.vvv_backend.service.gallery;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
@@ -49,7 +50,20 @@ class GalleryUploadServiceTest {
   private final MultipartProperties multipartProperties = new MultipartProperties();
   private final OwnerAccess ownerAccess = mock(OwnerAccess.class);
   private final GalleryBgmMediaMapper galleryBgmMediaMapper = mock(GalleryBgmMediaMapper.class);
-  private final GalleryBgmResolver bgmResolver = mock(GalleryBgmResolver.class);
+  private final GalleryBgmResolver bgmResolver = noBgmByDefaultResolver();
+
+  /**
+   * 默认桩：不配 BGM，即 {@code Bgm(null, null)}。
+   *
+   * 上传路径现在一律去问 resolver，「两个都没传」那份答案由 resolver 的规则 1 给出，
+   * 服务里不再自己判 —— 所以不带 BGM 的用例也得有个默认答复，否则拿到的是未桩的 null。
+   * 桩登记在字段初始化时（早于用例方法体），Mockito 后登记的赢，用例自己的 when(...) 覆盖得掉。
+   */
+  private static GalleryBgmResolver noBgmByDefaultResolver() {
+    GalleryBgmResolver resolver = mock(GalleryBgmResolver.class);
+    when(resolver.resolve(any(), any(), any())).thenReturn(new GalleryBgmResolver.Bgm(null, null));
+    return resolver;
+  }
 
   private GalleryUploadService service() {
     return new GalleryUploadService(ossUtil, galleryMapper, photoMapper, mock(GifMapper.class),
@@ -317,16 +331,25 @@ class GalleryUploadServiceTest {
     verify(galleryMapper, never()).insert(any());
   }
 
-  /** 不传 BGM 的普通上传不该为此多查一次库 */
+  /**
+   * 不传 BGM 的普通上传落库时那两列是空的。
+   *
+   * 判据看落库的那一行，不看「有没有调用 resolver」——
+   * 「两个都没传 = 不配 BGM」只有 resolver 规则 1 一处定义，上传路径必须去问它。
+   * 断言成「不许问」的话，规则 1 哪天变了，这里会拦着修的人，而不是跟着变。
+   */
   @Test
-  void aPlainUploadNeverConsultsTheBackgroundMusicValidator() throws Exception {
+  void aPlainUploadStoresNoBackgroundMusic() throws Exception {
     when(ossUtil.upload(any(), any())).thenReturn(OSS_URL);
     when(galleryMapper.insert(any())).thenReturn(1);
     when(photoMapper.insert(any())).thenReturn(1);
 
     service().uploadOne(png(), null, null, UPLOAD_ID, member(), null, null);
 
-    verify(bgmResolver, never()).resolve(any(), any(), any());
+    ArgumentCaptor<Gallery> saved = ArgumentCaptor.forClass(Gallery.class);
+    verify(galleryMapper).insert(saved.capture());
+    assertNull(saved.getValue().getBgmSrc());
+    assertNull(saved.getValue().getBgmType());
   }
 
   // ===== 替换资源文件 =====

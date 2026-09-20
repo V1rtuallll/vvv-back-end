@@ -14,12 +14,14 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.web.multipart.MultipartFile;
 
 import com.v1rtual.vvv_backend.entity.Gallery;
+import com.v1rtual.vvv_backend.entity.GalleryBgmMedia;
 import com.v1rtual.vvv_backend.entity.Gif;
 import com.v1rtual.vvv_backend.entity.Music;
 import com.v1rtual.vvv_backend.entity.Photo;
 import com.v1rtual.vvv_backend.entity.ResourceType;
 import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.entity.Video;
+import com.v1rtual.vvv_backend.mapper.GalleryBgmMediaMapper;
 import com.v1rtual.vvv_backend.mapper.GalleryMapper;
 import com.v1rtual.vvv_backend.mapper.GifMapper;
 import com.v1rtual.vvv_backend.mapper.MusicMapper;
@@ -30,6 +32,7 @@ import com.v1rtual.vvv_backend.service.media.MediaTypeDirectory;
 import com.v1rtual.vvv_backend.service.media.OssCleanupRecordService;
 import com.v1rtual.vvv_backend.service.media.UploadValidator;
 import com.v1rtual.vvv_backend.util.OssUtil;
+import com.v1rtual.vvv_backend.vo.GalleryBgmUploadVO;
 import com.v1rtual.vvv_backend.vo.Result;
 import com.v1rtual.vvv_backend.vo.UploadLimitVO;
 import com.v1rtual.vvv_backend.vo.UploadResultVO;
@@ -63,6 +66,7 @@ public class GalleryUploadService {
   private final OssCleanupRecordService ossCleanupRecordService;
   private final MultipartProperties multipartProperties;
   private final OwnerAccess ownerAccess;
+  private final GalleryBgmMediaMapper galleryBgmMediaMapper;
 
   /**
    * @param clientUploadId 客户端为该文件生成的 ID，用于超时重试的服务端幂等；必传
@@ -220,6 +224,58 @@ public class GalleryUploadService {
       log.error("替换文件后清理旧对象失败：{}", oldSrc, e);
       ossCleanupRecordService.recordFailure(oldSrc, OSS_CLEANUP_REASON);
     }
+  }
+
+  /**
+   * 上传一首背景音乐。
+   *
+   * 与 {@link #uploadOne} 的关键差别：这里**不建 gallery 项**，只在
+   * {@link GalleryBgmMediaMapper} 里登记一行。隔离因此是结构性的 ——
+   * 画廊列表读 gallery 表，这个文件压根不在里面，
+   * **不存在「某个查询忘了加过滤」这回事**。
+   *
+   * 不接受图片与 GIF：BGM 要的是能出声的东西。让图片进来只会得到一个静音项，
+   * 而页面不会报错，用户只会以为这首曲子坏了。
+   *
+   * 已知局限（与博客媒体同一处取舍）：上传成功、但紧接着的登记写入失败时，
+   * 桶里会留下一个没有登记行的对象。这种对象永远不会被任何校验放行，
+   * 属于可接受的有意取舍，不为此加回滚逻辑。
+   */
+  public Result<GalleryBgmUploadVO> uploadBgm(MultipartFile file, User user) {
+    if (user == null) return Result.error(401, "未登录或登录已过期");
+    if (file == null || file.isEmpty()) return Result.error(400, "文件不能为空");
+
+    ResourceType type;
+    try {
+      type = uploadValidator.validateAndResolveMedia(file);
+    } catch (IllegalArgumentException e) {
+      return Result.error(400, e.getMessage());
+    }
+    if (type != ResourceType.music && type != ResourceType.video) {
+      return Result.error(400, "背景音乐仅支持音频或视频");
+    }
+
+    String url;
+    try {
+      url = ossUtil.upload(file, MediaTypeDirectory.directoryFor(type));
+    } catch (IOException e) {
+      log.error("背景音乐上传失败：{}", file.getOriginalFilename(), e);
+      return Result.error(500, "上传文件失败");
+    }
+    if (StringUtils.isBlank(url)) return Result.error(500, "上传文件失败");
+
+    GalleryBgmMedia media = new GalleryBgmMedia();
+    media.setUrl(url);
+    // 对象键在这里就写进库，将来清理时直接取用，不再从地址反推
+    media.setObjectKey(ossUtil.objectKeyOf(url));
+    media.setUploaderId(user.getId());
+    galleryBgmMediaMapper.insert(media);
+
+    return Result.success(GalleryBgmUploadVO.builder()
+        .url(url)
+        // music 走 audio 元素；video 只取音轨，前端用隐藏的 video 元素播
+        .type(type == ResourceType.video ? "video" : "audio")
+        .build(), "上传成功");
   }
 
   /** 单文件与单请求的大小限制都来自配置，前端提示与后端校验共用这一份值。 */

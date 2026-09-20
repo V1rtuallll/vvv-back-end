@@ -21,6 +21,7 @@ import com.v1rtual.vvv_backend.service.gallery.GalleryInteractionService;
 import com.v1rtual.vvv_backend.service.gallery.GalleryManageService;
 import com.v1rtual.vvv_backend.service.gallery.GalleryQueryService;
 import com.v1rtual.vvv_backend.service.gallery.GalleryUploadService;
+import com.v1rtual.vvv_backend.vo.GalleryBgmUploadVO;
 import com.v1rtual.vvv_backend.vo.GalleryItemVO;
 import com.v1rtual.vvv_backend.vo.GalleryMetadataVO;
 import com.v1rtual.vvv_backend.vo.PageResultVO;
@@ -54,6 +55,17 @@ public class GalleryController {
       @RequestParam(required = false) String description,
       @RequestParam String clientUploadId) {
     return uploadService.uploadOne(file, title, description, clientUploadId, currentUser());
+  }
+
+  /**
+   * 上传一首背景音乐。
+   *
+   * 与 {@code /upload} 的关键差别：**不建画廊项**，只在登记表里记一行，
+   * 因此这个文件不会出现在画廊列表里。隔离是结构性的，不靠任何查询去过滤。
+   */
+  @PostMapping("/bgm")
+  public Result<GalleryBgmUploadVO> uploadBgm(@RequestParam("file") MultipartFile file) {
+    return uploadService.uploadBgm(file, currentUser());
   }
 
   /**

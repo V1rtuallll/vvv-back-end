@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -11,13 +13,16 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.boot.autoconfigure.web.servlet.MultipartProperties;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.mock.web.MockMultipartFile;
 
 import com.v1rtual.vvv_backend.entity.Gallery;
+import com.v1rtual.vvv_backend.entity.GalleryBgmMedia;
 import com.v1rtual.vvv_backend.entity.ResourceType;
 import com.v1rtual.vvv_backend.entity.User;
+import com.v1rtual.vvv_backend.mapper.GalleryBgmMediaMapper;
 import com.v1rtual.vvv_backend.mapper.GalleryMapper;
 import com.v1rtual.vvv_backend.mapper.GifMapper;
 import com.v1rtual.vvv_backend.mapper.MusicMapper;
@@ -27,6 +32,7 @@ import com.v1rtual.vvv_backend.security.OwnerAccess;
 import com.v1rtual.vvv_backend.service.media.OssCleanupRecordService;
 import com.v1rtual.vvv_backend.service.media.UploadValidator;
 import com.v1rtual.vvv_backend.util.OssUtil;
+import com.v1rtual.vvv_backend.vo.GalleryBgmUploadVO;
 import com.v1rtual.vvv_backend.vo.Result;
 import com.v1rtual.vvv_backend.vo.UploadLimitVO;
 import com.v1rtual.vvv_backend.vo.UploadResultVO;
@@ -42,12 +48,13 @@ class GalleryUploadServiceTest {
   private final OssCleanupRecordService cleanupRecordService = mock(OssCleanupRecordService.class);
   private final MultipartProperties multipartProperties = new MultipartProperties();
   private final OwnerAccess ownerAccess = mock(OwnerAccess.class);
+  private final GalleryBgmMediaMapper galleryBgmMediaMapper = mock(GalleryBgmMediaMapper.class);
 
   private GalleryUploadService service() {
     return new GalleryUploadService(ossUtil, galleryMapper, photoMapper, mock(GifMapper.class),
         mock(VideoMapper.class), mock(MusicMapper.class),
         new UploadValidator(multipartProperties), cleanupRecordService, multipartProperties,
-        ownerAccess);
+        ownerAccess, galleryBgmMediaMapper);
   }
 
   private static MockMultipartFile png() {
@@ -190,6 +197,75 @@ class GalleryUploadServiceTest {
     assertEquals(5L * 1024 * 1024, result.getData().getMaxFileSizeBytes());
     assertEquals(20L * 1024 * 1024, result.getData().getMaxRequestSizeBytes());
   }
+
+  // ===== 背景音乐上传 =====
+
+  private static MockMultipartFile mp3() {
+    // ID3 头：UploadValidator 的魔数校验认它
+    return new MockMultipartFile("file", "song.mp3", "audio/mpeg",
+        new byte[] {'I', 'D', '3', 0x03, 0x00, 0x00, 0x00});
+  }
+
+  /**
+   * D3 的闸：BGM 文件**不进 gallery 表**。
+   *
+   * 这是整个隔离方案的守卫。一旦有人为了省事把这条路径直接接到 uploadOne 上，
+   * 随图上传的 BGM 就会出现在画廊列表里 —— 而页面不报错，只是多了一张不该有的图。
+   */
+  @Test
+  void bgmUploadRegistersTheFileWithoutCreatingAGalleryItem() throws Exception {
+    when(ossUtil.upload(any(), any())).thenReturn("https://example.test/music/song.mp3");
+    // 对象键由真实实现推导，不桩 —— 桩的话断言等于在测 mock
+    doCallRealMethod().when(ossUtil).objectKeyOf(anyString());
+
+    Result<GalleryBgmUploadVO> result = service().uploadBgm(mp3(), member());
+
+    assertEquals(200, result.getCode());
+    assertEquals("https://example.test/music/song.mp3", result.getData().getUrl());
+    assertEquals("audio", result.getData().getType());
+    verify(ossUtil).upload(any(), eq(OssUtil.FileType.MUSIC));
+
+    ArgumentCaptor<GalleryBgmMedia> registered = ArgumentCaptor.forClass(GalleryBgmMedia.class);
+    verify(galleryBgmMediaMapper).insert(registered.capture());
+    assertEquals("https://example.test/music/song.mp3", registered.getValue().getUrl());
+    assertEquals("music/song.mp3", registered.getValue().getObjectKey());
+    assertEquals(1L, registered.getValue().getUploaderId());
+
+    // 一个 gallery 行都不许产生：它就是「出现在画廊列表里」的唯一原因
+    verify(galleryMapper, never()).insert(any());
+  }
+
+  @Test
+  void bgmUploadAcceptsVideoAndMarksItAsVideo() throws Exception {
+    MockMultipartFile mp4 = new MockMultipartFile("file", "clip.mp4", "video/mp4",
+        new byte[] {0x00, 0x00, 0x00, 0x20, 'f', 't', 'y', 'p'});
+    when(ossUtil.upload(any(), any())).thenReturn("https://example.test/video/clip.mp4");
+
+    Result<GalleryBgmUploadVO> result = service().uploadBgm(mp4, member());
+
+    assertEquals(200, result.getCode());
+    assertEquals("video", result.getData().getType());
+    verify(ossUtil).upload(any(), eq(OssUtil.FileType.VIDEO));
+  }
+
+  /** 图片当 BGM 只会得到一个静音项，而页面不报错 */
+  @Test
+  void bgmUploadRejectsImagesBecauseTheyCannotBeHeard() throws Exception {
+    Result<GalleryBgmUploadVO> result = service().uploadBgm(png(), member());
+
+    assertEquals(400, result.getCode());
+    assertEquals("背景音乐仅支持音频或视频", result.getMsg());
+    verify(ossUtil, never()).upload(any(), any());
+  }
+
+  @Test
+  void bgmUploadRejectsAnonymousCallers() throws Exception {
+    Result<GalleryBgmUploadVO> result = service().uploadBgm(mp3(), null);
+
+    assertEquals(401, result.getCode());
+    verify(ossUtil, never()).upload(any(), any());
+  }
+
   // ===== 替换资源文件 =====
 
   private static Gallery existingPhoto() {

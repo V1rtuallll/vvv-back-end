@@ -12,7 +12,7 @@ Deploy this repository's Spring Boot backend as an executable JAR controlled by 
 - Every branch push and pull request runs `.github/workflows/ci.yml`; CI builds the JAR but never changes the server.
 - `.github/workflows/deploy.yml` is manual only. When asked to deploy, use the currently checked-out branch: `branch="$(git branch --show-current)"`; push it first, then run `gh workflow run deploy.yml --ref "$branch"`.
 - Do not deploy an uncommitted working tree. GitHub Actions checks out the pushed commit selected by `--ref`.
-- The frontend is a separate repository and has its own deployment workflow. Deploy it separately when both halves of a site branch must change.
+- The frontend is a separate repository and has its own deployment workflow. A backend branch carries the bare major name (`V1rtualSS`); frontend variants that share it append a style suffix (`V1rtualSS_sky`). Deploy both separately when the site and its API must change together.
 - Upload an artifact to `/tmp`, verify it, copy it into a revisioned release directory, then atomically update `current`. Retain the three newest releases. Never delete `current` before a verified replacement exists.
 - Roll back by repointing `current` to a previous release and reloading Nginx or restarting systemd.
 

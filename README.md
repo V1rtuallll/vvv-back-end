@@ -92,6 +92,6 @@ http://localhost:3001/api -> http://127.0.0.1:8848
 
 生产配置位于服务器 `/etc/v1rtual/application-prod.yml`，包含数据库、OSS 和 JWT 设置，不提交到仓库。
 
-每个分支代表一套完整网站版本。push 和 PR 只执行 CI 构建；部署由 GitHub Actions 手动选择分支执行。改动 API、鉴权、资源字段、环境或 Nginx 路由时，前后端应使用同名分支，分别通过 CI 后再联合验证。
+每个分支代表一套完整网站版本。push 和 PR 只执行 CI 构建；部署由 GitHub Actions 手动选择分支执行。分支名按大版本对应：后端用大版本名（如 `V1rtualSS`），前端样式分支为 `大版本名_样式名`（如 `V1rtualSS_sky`）。改动 API、鉴权、资源字段、环境或 Nginx 路由时，前端样式分支对应后端大版本分支，两边分别通过 CI 后再联合验证。
 
 发布细节见 [CICD规范.md](CICD规范.md) 和 [skills/v1rtual-backend-cicd](skills/v1rtual-backend-cicd/SKILL.md)。

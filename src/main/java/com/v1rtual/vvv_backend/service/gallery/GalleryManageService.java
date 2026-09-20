@@ -181,6 +181,8 @@ public class GalleryManageService {
         .tags(gallery.getTags())
         .category(gallery.getCategory())
         .src(gallery.getSrc())
+        .bgmSrc(gallery.getBgmSrc())
+        .bgmType(gallery.getBgmType())
         .userId(gallery.getUserId())
         .build();
   }

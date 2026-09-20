@@ -114,6 +114,26 @@ class GalleryManageServiceTest {
     assertEquals("管理员改的", stored.getTitle());
   }
 
+  /**
+   * 编辑弹窗要回填当前配的曲子。漏了下发的话，用户打开编辑框看到「没配 BGM」，
+   * 原样保存一次就把已经配好的曲子清空了。
+   */
+  @Test
+  void editResponseCarriesTheBackgroundMusicSoTheFormCanRefillIt() {
+    Gallery stored = gallery(1L, 100L);
+    stored.setBgmSrc("https://example.test/music/a.mp3");
+    stored.setBgmType("audio");
+    when(galleryMapper.selectById(1L)).thenReturn(stored);
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+
+    Result<GalleryMetadataVO> result =
+        service().updateMetadata(1L, Map.of("title", "新标题"), user(100L, "作者"));
+
+    assertEquals(200, result.getCode());
+    assertEquals("https://example.test/music/a.mp3", result.getData().getBgmSrc());
+    assertEquals("audio", result.getData().getBgmType());
+  }
+
   @Test
   void reportsMissingResourcesInsteadOfSilentlySucceeding() {
     when(galleryMapper.selectById(404L)).thenReturn(null);

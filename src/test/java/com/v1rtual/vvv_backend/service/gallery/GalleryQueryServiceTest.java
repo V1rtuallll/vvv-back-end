@@ -1,6 +1,7 @@
 package com.v1rtual.vvv_backend.service.gallery;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -140,6 +141,27 @@ class GalleryQueryServiceTest {
     }
     verify(commentMapper, times(1)).countGalleryCommentsByTargetIds(queriedIds);
     verify(commentMapper, never()).countGalleryCommentByTargetId(anyLong());
+  }
+
+  /**
+   * 访客要靠这两个字段才能播 BGM。漏了下发的话，配好的曲子会**静默不响** ——
+   * 页面不报错，用户只会以为这首曲子坏了。
+   */
+  @Test
+  void exposesTheBackgroundMusicSoVisitorsCanPlayIt() {
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    Gallery withBgm = Gallery.builder().id(1L).type(ResourceType.photo).userId(null)
+        .bgmSrc("https://bucket.example.test/music/a.mp3").bgmType("audio").build();
+    Gallery withoutBgm = Gallery.builder().id(2L).type(ResourceType.photo).userId(null).build();
+    when(galleryMapper.selectPage(0L, 12, null)).thenReturn(List.of(withBgm, withoutBgm));
+    GalleryQueryService service = service(galleryMapper, mock(CommentMapper.class));
+
+    List<GalleryItemVO> items = service.list(1, 12, null).getData().getList();
+
+    assertEquals("https://bucket.example.test/music/a.mp3", items.get(0).getBgmSrc());
+    assertEquals("audio", items.get(0).getBgmType());
+    assertNull(items.get(1).getBgmSrc());
+    assertNull(items.get(1).getBgmType());
   }
 
   @Test

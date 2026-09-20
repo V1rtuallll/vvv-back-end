@@ -20,5 +20,9 @@ public class GalleryMetadataVO {
   private String tags;
   private String category;
   private String src;
+
+  /** 背景音乐，编辑弹窗要回填。为 null 表示这条项没配 BGM。 */
+  private String bgmSrc;
+  private String bgmType;
   private Long userId;
 }

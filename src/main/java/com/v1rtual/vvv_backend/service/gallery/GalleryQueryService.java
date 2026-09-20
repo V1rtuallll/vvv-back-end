@@ -56,24 +56,10 @@ public class GalleryQueryService {
     }
     Map<Long, Long> commentCounts = countCommentsByGalleryId(galleryList);
 
-    List<GalleryItemVO> items = galleryList.stream().map(gallery -> {
-      User uploader = userMap.get(gallery.getUserId());
-      return GalleryItemVO.builder()
-          .id(gallery.getId())
-          .type(gallery.getType() == null ? null : gallery.getType().name())
-          .title(gallery.getTitle())
-          .description(gallery.getDescription())
-          .src(gallery.getSrc())
-          .likes(gallery.getLikes())
-          .commentCount(commentCounts.getOrDefault(gallery.getId(), 0L))
-          .createdAt(gallery.getCreatedAt())
-          .userId(gallery.getUserId())
-          .uploaderUsername(uploader != null ? uploader.getUsername() : "神秘人")
-          .uploaderAvatar(uploader != null && uploader.getAvatar() != null
-              ? uploader.getAvatar()
-              : "/default-avatar.gif")
-          .build();
-    }).collect(Collectors.toList());
+    List<GalleryItemVO> items = galleryList.stream()
+        .map(gallery -> toItem(gallery, userMap.get(gallery.getUserId()),
+            commentCounts.getOrDefault(gallery.getId(), 0L)))
+        .collect(Collectors.toList());
 
     return Result.success(PageResultVO.<GalleryItemVO>builder()
         .list(items)
@@ -99,6 +85,36 @@ public class GalleryQueryService {
       if (candidate.name().equals(normalized)) return normalized;
     }
     return null;
+  }
+
+  /**
+   * 一条 gallery 行映射成列表项 VO。
+   *
+   * 抽成方法是因为 BGM 候选列表要用同一套映射（候选列表返回的也是 GalleryItemVO）。
+   * 两处各写一遍的话，将来给列表项加字段极容易只加一处，而那种缺陷是**静默的**：
+   * 页面上那一条就是少个值，不报错。
+   *
+   * @param commentCount 评论数。候选列表不展示评论数，调用方传 0，
+   *                     免得为一次选曲的操作白跑一遍聚合查询。
+   */
+  private GalleryItemVO toItem(Gallery gallery, User uploader, long commentCount) {
+    return GalleryItemVO.builder()
+        .id(gallery.getId())
+        .type(gallery.getType() == null ? null : gallery.getType().name())
+        .title(gallery.getTitle())
+        .description(gallery.getDescription())
+        .src(gallery.getSrc())
+        .likes(gallery.getLikes())
+        .commentCount(commentCount)
+        .createdAt(gallery.getCreatedAt())
+        .userId(gallery.getUserId())
+        .uploaderUsername(uploader != null ? uploader.getUsername() : "神秘人")
+        .uploaderAvatar(uploader != null && uploader.getAvatar() != null
+            ? uploader.getAvatar()
+            : "/default-avatar.gif")
+        .bgmSrc(gallery.getBgmSrc())
+        .bgmType(gallery.getBgmType())
+        .build();
   }
 
   /**

@@ -26,4 +26,13 @@ public class GalleryItemVO {
   private Long userId;
   private String uploaderUsername;
   private String uploaderAvatar;
+
+  /**
+   * 背景音乐地址与类型（audio / video）。两者要么都有值、要么都为 null。
+   *
+   * 与 alt / tags / category 不同，这个字段**必须**下发：它是播放数据，
+   * 访客拿不到就播不出声，而页面不会报错，只是静默没声音。
+   */
+  private String bgmSrc;
+  private String bgmType;
 }

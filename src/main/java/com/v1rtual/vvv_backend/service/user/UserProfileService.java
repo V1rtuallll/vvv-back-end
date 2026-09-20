@@ -8,11 +8,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.v1rtual.vvv_backend.entity.User;
+import com.v1rtual.vvv_backend.mapper.UserMapper;
 import com.v1rtual.vvv_backend.service.media.UploadValidator;
 import com.v1rtual.vvv_backend.service.UserService;
 import com.v1rtual.vvv_backend.util.JwtUtil;
 import com.v1rtual.vvv_backend.util.OssUtil;
 import com.v1rtual.vvv_backend.vo.Result;
+import com.v1rtual.vvv_backend.vo.UserStatsVO;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -27,6 +29,7 @@ public class UserProfileService {
   private final OssUtil ossUtil;
   private final UploadValidator uploadValidator;
   private final JwtUtil jwtUtil;
+  private final UserMapper userMapper;
 
   public Result<String> uploadAvatar(MultipartFile file, User currentUser) {
     if (currentUser == null) return Result.error("请先登录");
@@ -78,6 +81,23 @@ public class UserProfileService {
   public Result<User> getCurrentUserInfo(User currentUser) {
     if (currentUser == null) return Result.error("请先登录");
     return publicUser(currentUser, "查询成功");
+  }
+
+  /**
+   * 当前登录用户的战绩。未登录返回错误而不是全 0 ——
+   * 全 0 会被前端当成「这个人真的什么都没发」，和「没登录」混在一起。
+   */
+  public Result<UserStatsVO> getCurrentUserStats(User currentUser) {
+    if (currentUser == null || currentUser.getId() == null) return Result.error("请先登录");
+    UserStatsVO stats = userMapper.selectUserStats(currentUser.getId());
+    if (stats == null) stats = new UserStatsVO();
+    // 子查询在无数据时 COALESCE 已兜底，这里再兜一次 null 字段：
+    // 老库或空表上 SUM 可能直接返回 null，前端拿到 null 会渲染成空白
+    if (stats.getGalleryCount() == null) stats.setGalleryCount(0L);
+    if (stats.getGalleryLikes() == null) stats.setGalleryLikes(0L);
+    if (stats.getBlogCount() == null) stats.setBlogCount(0L);
+    if (stats.getBlogViews() == null) stats.setBlogViews(0L);
+    return Result.success(stats, "查询成功");
   }
 
   public Result<Long> countUsers() {

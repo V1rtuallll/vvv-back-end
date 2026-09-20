@@ -10,6 +10,7 @@ import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 import com.v1rtual.vvv_backend.entity.User;
+import com.v1rtual.vvv_backend.vo.UserStatsVO;
 
 @Mapper
 public interface UserMapper {
@@ -48,6 +49,20 @@ public interface UserMapper {
    */
   @Select("SELECT COUNT(*) FROM user")
   Long countUsers();
+
+  /**
+   * 用户的四项战绩：画廊数、画廊获赞、文章数、文章总阅读。
+   *
+   * 刻意用一条带子查询的 SQL 而不是四次调用：ID 卡一渲染就要全部四个数，
+   * 分开查既多三次往返，四次数之间还可能落在不同的数据快照上。
+   * blog 只算 status = 1（已发布），草稿不该计入对外展示的战绩。
+   */
+  @Select("SELECT "
+      + "(SELECT COUNT(*) FROM gallery WHERE user_id = #{userId}) AS galleryCount, "
+      + "(SELECT COALESCE(SUM(likes), 0) FROM gallery WHERE user_id = #{userId}) AS galleryLikes, "
+      + "(SELECT COUNT(*) FROM blog WHERE author_id = #{userId} AND status = 1) AS blogCount, "
+      + "(SELECT COALESCE(SUM(views), 0) FROM blog WHERE author_id = #{userId} AND status = 1) AS blogViews")
+  UserStatsVO selectUserStats(@Param("userId") Long userId);
 
   /**
    * 根据 ID 查找用户

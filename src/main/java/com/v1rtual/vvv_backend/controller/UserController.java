@@ -16,6 +16,7 @@ import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.security.CurrentUserProvider;
 import com.v1rtual.vvv_backend.service.user.UserProfileService;
 import com.v1rtual.vvv_backend.vo.Result;
+import com.v1rtual.vvv_backend.vo.UserStatsVO;
 
 import lombok.RequiredArgsConstructor;
 
@@ -45,6 +46,11 @@ public class UserController {
   @GetMapping("/info")
   public Result<User> getUserInfo() {
     return userProfileService.getCurrentUserInfo(currentUser());
+  }
+
+  @GetMapping("/stats")
+  public Result<UserStatsVO> getUserStats() {
+    return userProfileService.getCurrentUserStats(currentUser());
   }
 
   @GetMapping("/count")

@@ -21,10 +21,10 @@ public interface GalleryMapper {
 
   @Insert("INSERT INTO gallery " +
       "(type, title, description, src, tags, alt, category, thumbnail, duration, " +
-      "artist, album, cover_image, client_upload_id, user_id, uploader_username, created_at, updated_at) " +
+      "artist, album, cover_image, bgm_src, bgm_type, client_upload_id, user_id, uploader_username, created_at, updated_at) " +
       "VALUES " +
       "(#{type}, #{title}, #{description}, #{src}, #{tags}, #{alt}, #{category}, #{thumbnail}, #{duration}, " +
-      "#{artist}, #{album}, #{coverImage}, #{clientUploadId}, #{userId}, #{uploaderUsername}, NOW(), NOW())")
+      "#{artist}, #{album}, #{coverImage}, #{bgmSrc}, #{bgmType}, #{clientUploadId}, #{userId}, #{uploaderUsername}, NOW(), NOW())")
   @Options(useGeneratedKeys = true, keyProperty = "id")
   int insert(Gallery gallery);
 

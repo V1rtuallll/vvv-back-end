@@ -46,6 +46,9 @@ public class GalleryController {
    * 上传单个文件。前端按文件并发发起请求，每个请求一个独立事务，
    * 某个文件失败不会影响同批次的其他文件。
    *
+   * bgmSrc / bgmType 是随图一起配的背景音乐，可不传。两者要么都不传、要么都传：
+   * 只传一个会在服务端拿到 400，而不是被当成「清空」。
+   *
    * @param clientUploadId 客户端生成的 ID，超时重试时靠它幂等，必传
    */
   @PostMapping("/upload")
@@ -53,8 +56,10 @@ public class GalleryController {
       @RequestParam("file") MultipartFile file,
       @RequestParam(required = false) String title,
       @RequestParam(required = false) String description,
-      @RequestParam String clientUploadId) {
-    return uploadService.uploadOne(file, title, description, clientUploadId, currentUser());
+      @RequestParam String clientUploadId,
+      @RequestParam(required = false) String bgmSrc,
+      @RequestParam(required = false) String bgmType) {
+    return uploadService.uploadOne(file, title, description, clientUploadId, currentUser(), bgmSrc, bgmType);
   }
 
   /**

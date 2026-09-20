@@ -49,12 +49,13 @@ class GalleryUploadServiceTest {
   private final MultipartProperties multipartProperties = new MultipartProperties();
   private final OwnerAccess ownerAccess = mock(OwnerAccess.class);
   private final GalleryBgmMediaMapper galleryBgmMediaMapper = mock(GalleryBgmMediaMapper.class);
+  private final GalleryBgmResolver bgmResolver = mock(GalleryBgmResolver.class);
 
   private GalleryUploadService service() {
     return new GalleryUploadService(ossUtil, galleryMapper, photoMapper, mock(GifMapper.class),
         mock(VideoMapper.class), mock(MusicMapper.class),
         new UploadValidator(multipartProperties), cleanupRecordService, multipartProperties,
-        ownerAccess, galleryBgmMediaMapper);
+        ownerAccess, galleryBgmMediaMapper, bgmResolver);
   }
 
   private static MockMultipartFile png() {
@@ -82,7 +83,7 @@ class GalleryUploadServiceTest {
     });
     when(photoMapper.insert(any())).thenReturn(1);
 
-    Result<UploadResultVO> result = service().uploadOne(png(), "标题", "描述", UPLOAD_ID, member());
+    Result<UploadResultVO> result = service().uploadOne(png(), "标题", "描述", UPLOAD_ID, member(), null, null);
 
     assertEquals(200, result.getCode());
     assertEquals(42L, result.getData().getId());
@@ -94,7 +95,7 @@ class GalleryUploadServiceTest {
 
   @Test
   void rejectsAnonymousUploadsBeforeTouchingOss() throws Exception {
-    Result<UploadResultVO> result = service().uploadOne(png(), null, null, UPLOAD_ID, null);
+    Result<UploadResultVO> result = service().uploadOne(png(), null, null, UPLOAD_ID, null, null, null);
 
     assertEquals(401, result.getCode());
     verify(ossUtil, never()).upload(any(), any());
@@ -102,7 +103,7 @@ class GalleryUploadServiceTest {
 
   @Test
   void requiresAClientUploadIdSoRetriesCanBeDeduplicated() throws Exception {
-    Result<UploadResultVO> result = service().uploadOne(png(), null, null, "  ", member());
+    Result<UploadResultVO> result = service().uploadOne(png(), null, null, "  ", member(), null, null);
 
     assertEquals(400, result.getCode());
     verify(ossUtil, never()).upload(any(), any());
@@ -110,7 +111,7 @@ class GalleryUploadServiceTest {
 
   @Test
   void rejectsOverlongClientUploadIds() throws Exception {
-    Result<UploadResultVO> result = service().uploadOne(png(), null, null, "x".repeat(65), member());
+    Result<UploadResultVO> result = service().uploadOne(png(), null, null, "x".repeat(65), member(), null, null);
 
     assertEquals(400, result.getCode());
     verify(ossUtil, never()).upload(any(), any());
@@ -123,7 +124,7 @@ class GalleryUploadServiceTest {
   void reportsWhyAFileWasRejectedInsteadOfSkippingItSilently() throws Exception {
     MockMultipartFile text = new MockMultipartFile("file", "note.txt", "text/plain", "hi".getBytes());
 
-    Result<UploadResultVO> result = service().uploadOne(text, null, null, UPLOAD_ID, member());
+    Result<UploadResultVO> result = service().uploadOne(text, null, null, UPLOAD_ID, member(), null, null);
 
     assertEquals(400, result.getCode());
     assertEquals("文件类型与扩展名不匹配或不受支持", result.getMsg());
@@ -135,7 +136,7 @@ class GalleryUploadServiceTest {
     Gallery existing = Gallery.builder().id(7L).src(OSS_URL).build();
     when(galleryMapper.selectByClientUploadId(UPLOAD_ID)).thenReturn(existing);
 
-    Result<UploadResultVO> result = service().uploadOne(png(), null, null, UPLOAD_ID, member());
+    Result<UploadResultVO> result = service().uploadOne(png(), null, null, UPLOAD_ID, member(), null, null);
 
     assertEquals(200, result.getCode());
     assertEquals(7L, result.getData().getId());
@@ -149,7 +150,7 @@ class GalleryUploadServiceTest {
     when(ossUtil.upload(any(), any())).thenReturn(OSS_URL);
     when(galleryMapper.insert(any())).thenThrow(new IllegalStateException("db unavailable"));
 
-    Result<UploadResultVO> result = service().uploadOne(png(), null, null, UPLOAD_ID, member());
+    Result<UploadResultVO> result = service().uploadOne(png(), null, null, UPLOAD_ID, member(), null, null);
 
     assertEquals(500, result.getCode());
     verify(ossUtil).deleteByPublicUrl(OSS_URL);
@@ -165,7 +166,7 @@ class GalleryUploadServiceTest {
     when(galleryMapper.insert(any())).thenThrow(new IllegalStateException("db unavailable"));
     doThrow(new RuntimeException("oss down")).when(ossUtil).deleteByPublicUrl(OSS_URL);
 
-    Result<UploadResultVO> result = service().uploadOne(png(), null, null, UPLOAD_ID, member());
+    Result<UploadResultVO> result = service().uploadOne(png(), null, null, UPLOAD_ID, member(), null, null);
 
     assertEquals(500, result.getCode());
     verify(cleanupRecordService).recordFailure(anyString(), anyString());
@@ -179,7 +180,7 @@ class GalleryUploadServiceTest {
     // 第一次幂等检查时还没有，插入撞唯一索引后再查就能查到
     when(galleryMapper.selectByClientUploadId(UPLOAD_ID)).thenReturn(null, winner);
 
-    Result<UploadResultVO> result = service().uploadOne(png(), null, null, UPLOAD_ID, member());
+    Result<UploadResultVO> result = service().uploadOne(png(), null, null, UPLOAD_ID, member(), null, null);
 
     assertEquals(200, result.getCode());
     assertEquals(9L, result.getData().getId());
@@ -264,6 +265,68 @@ class GalleryUploadServiceTest {
 
     assertEquals(401, result.getCode());
     verify(ossUtil, never()).upload(any(), any());
+  }
+
+  // ===== 随图上传时带 BGM =====
+
+  private static final String SONG = "https://example.test/music/song.mp3";
+
+  /**
+   * 随图配的 BGM 要真的写进那一行。
+   *
+   * 写不进去的话用户以为配好了，详情弹窗静默无声，也没有任何地方会报错。
+   */
+  @Test
+  void uploadCanCarryABackgroundMusicInTheSameRequest() throws Exception {
+    when(ossUtil.upload(any(), any())).thenReturn(OSS_URL);
+    when(galleryMapper.insert(any())).thenAnswer(invocation -> {
+      invocation.getArgument(0, Gallery.class).setId(42L);
+      return 1;
+    });
+    when(photoMapper.insert(any())).thenReturn(1);
+    when(bgmResolver.resolve(SONG, "audio", ResourceType.photo))
+        .thenReturn(new GalleryBgmResolver.Bgm(SONG, "audio"));
+
+    Result<UploadResultVO> result =
+        service().uploadOne(png(), "标题", "描述", UPLOAD_ID, member(), SONG, "audio");
+
+    assertEquals(200, result.getCode());
+    ArgumentCaptor<Gallery> saved = ArgumentCaptor.forClass(Gallery.class);
+    verify(galleryMapper).insert(saved.capture());
+    assertEquals(SONG, saved.getValue().getBgmSrc());
+    assertEquals("audio", saved.getValue().getBgmType());
+  }
+
+  /**
+   * BGM 不合法时不许白传一次文件。
+   *
+   * 传上去再删等于多花一次上传、多一次清理，而清理本身也可能失败 ——
+   * 失败会留下一个没有登记行的孤儿对象，永远没人清理。
+   */
+  @Test
+  void anInvalidBackgroundMusicIsRejectedBeforeAnythingIsUploaded() throws Exception {
+    when(bgmResolver.resolve(any(), any(), any()))
+        .thenThrow(new IllegalArgumentException("背景音乐必须是本站上传的音频或视频"));
+
+    Result<UploadResultVO> result = service().uploadOne(png(), null, null, UPLOAD_ID, member(),
+        "https://evil.test/a.mp3", "audio");
+
+    assertEquals(400, result.getCode());
+    assertEquals("背景音乐必须是本站上传的音频或视频", result.getMsg());
+    verify(ossUtil, never()).upload(any(), any());
+    verify(galleryMapper, never()).insert(any());
+  }
+
+  /** 不传 BGM 的普通上传不该为此多查一次库 */
+  @Test
+  void aPlainUploadNeverConsultsTheBackgroundMusicValidator() throws Exception {
+    when(ossUtil.upload(any(), any())).thenReturn(OSS_URL);
+    when(galleryMapper.insert(any())).thenReturn(1);
+    when(photoMapper.insert(any())).thenReturn(1);
+
+    service().uploadOne(png(), null, null, UPLOAD_ID, member(), null, null);
+
+    verify(bgmResolver, never()).resolve(any(), any(), any());
   }
 
   // ===== 替换资源文件 =====

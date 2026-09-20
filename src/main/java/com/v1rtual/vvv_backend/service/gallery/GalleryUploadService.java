@@ -67,14 +67,17 @@ public class GalleryUploadService {
   private final MultipartProperties multipartProperties;
   private final OwnerAccess ownerAccess;
   private final GalleryBgmMediaMapper galleryBgmMediaMapper;
+  private final GalleryBgmResolver bgmResolver;
 
   /**
    * @param clientUploadId 客户端为该文件生成的 ID，用于超时重试的服务端幂等；必传
+   * @param bgmSrc         随图配的背景音乐地址；不配时为 null
+   * @param bgmType        背景音乐类型 audio / video；不配时为 null
    * @return 资源 ID、URL、类型与最终状态
    */
   @Transactional
   public Result<UploadResultVO> uploadOne(MultipartFile file, String title, String description,
-      String clientUploadId, User user) {
+      String clientUploadId, User user, String bgmSrc, String bgmType) {
     if (user == null) return Result.error(401, "未登录或登录已过期");
     if (file == null || file.isEmpty()) return Result.error(400, "文件不能为空");
     if (StringUtils.isBlank(clientUploadId)) return Result.error(400, "缺少客户端上传ID");
@@ -97,6 +100,20 @@ public class GalleryUploadService {
       return Result.error(400, e.getMessage());
     }
 
+    // 随图带的 BGM 在动手传 OSS 之前先校验。
+    //
+    // 顺序很关键：放后面的话，BGM 不合法时文件已经传上去了，还得再删一次 ——
+    // 白花一次上传，而且那次清理本身也可能失败（失败会留下一个没有登记行的孤儿对象）。
+    // 两个都不带时这里是空转，不查库：新建的项本来就没有 BGM 可清。
+    GalleryBgmResolver.Bgm bgm = new GalleryBgmResolver.Bgm(null, null);
+    if (StringUtils.isNotBlank(bgmSrc) || StringUtils.isNotBlank(bgmType)) {
+      try {
+        bgm = bgmResolver.resolve(bgmSrc, bgmType, type);
+      } catch (IllegalArgumentException e) {
+        return Result.error(400, e.getMessage());
+      }
+    }
+
     String finalTitle = StringUtils.isBlank(title) ? file.getOriginalFilename() : title;
     String finalDescription = StringUtils.defaultString(description);
 
@@ -110,6 +127,8 @@ public class GalleryUploadService {
           .title(finalTitle)
           .description(finalDescription)
           .src(url)
+          .bgmSrc(bgm.src())
+          .bgmType(bgm.type())
           .clientUploadId(uploadId)
           .userId(user.getId())
           .uploaderUsername(user.getUsername())

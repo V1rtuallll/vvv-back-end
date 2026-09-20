@@ -226,7 +226,7 @@ class BlogQueryServiceTest {
   }
 
   @Test
-  void latestReturnsOnlyTheThreeFieldsTheSidebarNeeds() {
+  void latestReturnsOnlyTheFieldsTheSidebarNeeds() {
     when(blogMapper.selectLatest(5)).thenReturn(List.of(row(1L, "标题", "V1rtual", 1)));
 
     Result<List<BlogLatestVO>> result = service().latest(5);
@@ -235,6 +235,8 @@ class BlogQueryServiceTest {
     assertEquals(1L, item.getId());
     assertEquals("标题", item.getTitle());
     assertEquals("标题 这是正文内容，够长到可以当摘要用。", item.getSummary());
+    // 右栏要拿它当缩略图，漏了这条字段列表封面就永远不显示
+    assertEquals("https://bucket.example.test/blog/cover.png", item.getCoverImage());
   }
 
   // ---------- comments ----------

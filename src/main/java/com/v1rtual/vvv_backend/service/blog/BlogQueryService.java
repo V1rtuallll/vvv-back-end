@@ -68,6 +68,7 @@ public class BlogQueryService {
           .id(row.getId())
           .title(row.getTitle())
           .summary(BlogSummary.from(row.getContent()))
+          .coverImage(row.getCoverImage())
           .createdAt(row.getCreatedAt())
           .build());
     }

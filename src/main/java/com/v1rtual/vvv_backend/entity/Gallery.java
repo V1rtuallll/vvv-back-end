@@ -34,6 +34,15 @@ public class Gallery {
   private String album; // music
   private String coverImage; // music
 
+  /**
+   * 背景音乐地址，仅 photo / gif 使用。
+   * 与 {@link #bgmType} 要么都有值、要么都为 null，由 GalleryBgmResolver 保证。
+   */
+  private String bgmSrc;
+
+  /** 背景音乐类型：audio / video。不是 ResourceType 的取值。 */
+  private String bgmType;
+
   private Long userId;
   private String uploaderUsername;
 

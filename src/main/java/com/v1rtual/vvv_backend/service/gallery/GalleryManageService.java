@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 
 import com.v1rtual.vvv_backend.entity.Comment;
 import com.v1rtual.vvv_backend.entity.Gallery;
+import com.v1rtual.vvv_backend.entity.ResourceType;
 import com.v1rtual.vvv_backend.entity.TargetType;
 import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.mapper.CommentMapper;
@@ -34,8 +35,14 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class GalleryManageService {
 
-  /** 允许通过编辑接口修改的字段。src / type / user_id 不在其中：换文件必须走新的上传流程。 */
-  private static final Set<String> EDITABLE_FIELDS = Set.of("title", "description", "alt", "tags", "category");
+  /**
+   * 允许通过编辑接口修改的字段。src / type / user_id 不在其中：换文件必须走新的上传流程。
+   *
+   * bgmSrc / bgmType 是一对，值要先过 {@link GalleryBgmResolver} 才落到实体上 ——
+   * 见 {@link #updateMetadata} 里对 fields 的处理，它们**不能**直接走 applyField 的原文。
+   */
+  private static final Set<String> EDITABLE_FIELDS =
+      Set.of("title", "description", "alt", "tags", "category", "bgmSrc", "bgmType");
 
   private static final String GALLERY_OSS_CLEANUP_REASON = "删除 Gallery 时 OSS 对象清理失败";
 
@@ -45,6 +52,7 @@ public class GalleryManageService {
   private final OssCleanupRecordService ossCleanupRecordService;
   private final OssUtil ossUtil;
   private final OwnerAccess ownerAccess;
+  private final GalleryBgmResolver bgmResolver;
 
   public Result<GalleryMetadataVO> updateMetadata(Long id, Map<String, Object> body, User currentUser) {
     if (currentUser == null) return Result.error(401, "未登录或登录已过期");
@@ -55,10 +63,35 @@ public class GalleryManageService {
     if (gallery == null) return Result.error(404, "资源不存在");
     if (!canManage(gallery.getUserId(), currentUser)) return Result.error(403, OwnerAccess.DENIED_MESSAGE);
 
+    // BGM 是一对字段：请求体里只出现一边，说明调用方漏传，而不是「清空」的意思。
+    // 两边都在（哪怕值都是 null）才表示「这次要动 BGM」。
+    boolean hasBgmSrc = body.containsKey("bgmSrc");
+    boolean hasBgmType = body.containsKey("bgmType");
+    if (hasBgmSrc != hasBgmType) {
+      return Result.error(400, "背景音乐参数不完整，bgmSrc 与 bgmType 必须同时提供");
+    }
+
+    // 校验通过的 BGM 落到一个临时表里再交给下面的白名单循环。
+    // 不能直接让循环用请求体里的原文：resolve 会把地址去空白，用它返回的值才能
+    // 保证存进库的串与登记表里那一串一模一样 —— 差一个空格，前端就永远匹配不上。
+    Map<String, Object> fields = body;
+    if (hasBgmSrc) {
+      GalleryBgmResolver.Bgm bgm;
+      try {
+        bgm = bgmResolver.resolve(textOf(body.get("bgmSrc")), textOf(body.get("bgmType")),
+            gallery.getType());
+      } catch (IllegalArgumentException e) {
+        return Result.error(400, e.getMessage());
+      }
+      fields = new LinkedHashMap<>(body);
+      fields.put("bgmSrc", bgm.src());
+      fields.put("bgmType", bgm.type());
+    }
+
     // 白名单之外的字段（src / type / user_id 等）直接忽略并记日志，不静默改掉关联键与归属
     Map<String, Object> ignored = new LinkedHashMap<>();
     int applied = 0;
-    for (Map.Entry<String, Object> entry : body.entrySet()) {
+    for (Map.Entry<String, Object> entry : fields.entrySet()) {
       if (!EDITABLE_FIELDS.contains(entry.getKey())) {
         ignored.put(entry.getKey(), entry.getValue());
         continue;
@@ -149,10 +182,24 @@ public class GalleryManageService {
       case "alt" -> gallery.setAlt(text);
       case "tags" -> gallery.setTags(text);
       case "category" -> gallery.setCategory(text);
+      case "bgmSrc" -> gallery.setBgmSrc(text);
+      case "bgmType" -> gallery.setBgmType(text);
       default -> {
         // EDITABLE_FIELDS 已经过滤过，不会走到这里
       }
     }
+  }
+
+  /**
+   * 把请求体里的值收敛成字符串：null 原样返回，其余去掉首尾空白，空白视为 null。
+   *
+   * 只在 BGM 这一对字段上用。title / description 走 applyField 原来的写法 ——
+   * 那两个字段的历史行为就是不 trim，不要顺手改掉别人的行为。
+   */
+  private static String textOf(Object value) {
+    if (value == null) return null;
+    String text = String.valueOf(value).trim();
+    return text.isEmpty() ? null : text;
   }
 
   /**

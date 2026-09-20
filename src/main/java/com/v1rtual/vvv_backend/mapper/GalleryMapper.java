@@ -63,14 +63,30 @@ public interface GalleryMapper {
   /**
    * 更新元数据。SET 列表只含可编辑列，src / type / user_id 不参与，
    * 避免任何编辑入口改掉两表之间的关联键与归属。
+   *
+   * bgm_src / bgm_type 在这一句里：它们**总是**从实体上取值写回。
+   * 编辑接口在没提到 BGM 时不会动实体的这两个字段，而实体是 selectById（SELECT *）
+   * 读出来的，所以「这次不改 BGM」会原样写回同一个值，不会被清掉。
+   * 后台资源管理的编辑也走这一句，同样只是原样写回。
    */
   @Update("UPDATE gallery SET title = #{title}, description = #{description}, alt = #{alt}, " +
-      "tags = #{tags}, category = #{category}, duration = #{duration}, updated_at = NOW() " +
+      "tags = #{tags}, category = #{category}, duration = #{duration}, " +
+      "bgm_src = #{bgmSrc}, bgm_type = #{bgmType}, updated_at = NOW() " +
       "WHERE id = #{id}")
   int updateMetadata(Gallery gallery);
 
   @Delete("DELETE FROM gallery WHERE id = #{id}")
   int deleteById(Long id);
+
+  /**
+   * 有多少条项拿这个地址当背景音乐。
+   *
+   * 删除保护用它：删除一条项会连它的 OSS 对象一起删掉，而删掉之后所有配了它的图
+   * 都会**静默静音** —— 页面不报错，就是没声音。这类故障没人会去排查，
+   * 所以宁可在删除这一步拦下来。
+   */
+  @Select("SELECT COUNT(*) FROM gallery WHERE bgm_src = #{src}")
+  long countByBgmSrc(@Param("src") String src);
 
   /**
    * 只改 src。src 是 gallery 与类型表之间的关联键，替换文件时必须两张表一起改，

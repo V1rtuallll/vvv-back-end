@@ -2,10 +2,12 @@ package com.v1rtual.vvv_backend.service.gallery;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -15,6 +17,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 
 import com.v1rtual.vvv_backend.entity.Comment;
 import com.v1rtual.vvv_backend.entity.Gallery;
@@ -39,10 +42,11 @@ class GalleryManageServiceTest {
   private final OssCleanupRecordService cleanupRecordService = mock(OssCleanupRecordService.class);
   private final OssUtil ossUtil = mock(OssUtil.class);
   private final OwnerAccess ownerAccess = mock(OwnerAccess.class);
+  private final GalleryBgmResolver bgmResolver = mock(GalleryBgmResolver.class);
 
   private GalleryManageService service() {
     return new GalleryManageService(galleryMapper, commentMapper, deletionService,
-        cleanupRecordService, ossUtil, ownerAccess);
+        cleanupRecordService, ossUtil, ownerAccess, bgmResolver);
   }
 
   private static User user(Long id, String name) {
@@ -172,6 +176,114 @@ class GalleryManageServiceTest {
         service().updateMetadata(1L, Map.of("src", "https://evil.test/x.png"), user(100L, "作者"));
 
     assertEquals(400, result.getCode());
+    verify(galleryMapper, never()).updateMetadata(any());
+  }
+
+  // ===== 背景音乐的写入 =====
+
+  private static final String SONG = "https://example.test/music/a.mp3";
+
+  private void stubBgm(String src, String type, ResourceType targetType) {
+    when(bgmResolver.resolve(src, type, targetType))
+        .thenReturn(new GalleryBgmResolver.Bgm(src, type));
+  }
+
+  @Test
+  void editingWritesTheBackgroundMusicOntoTheRow() {
+    Gallery stored = gallery(1L, 100L);
+    when(galleryMapper.selectById(1L)).thenReturn(stored);
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    stubBgm(SONG, "audio", ResourceType.photo);
+
+    Map<String, Object> body = new HashMap<>();
+    body.put("bgmSrc", SONG);
+    body.put("bgmType", "audio");
+    Result<GalleryMetadataVO> result = service().updateMetadata(1L, body, user(100L, "作者"));
+
+    assertEquals(200, result.getCode());
+    assertEquals(SONG, stored.getBgmSrc());
+    assertEquals("audio", stored.getBgmType());
+  }
+
+  /**
+   * 写入用的是校验器返回的值，不是请求体里的原文。
+   *
+   * 差一个空格，存进库的地址就与登记表里那一串对不上，前端按地址取曲子会永远落空 ——
+   * 而页面不报错，只是没声音。
+   */
+  @Test
+  void theStoredUrlComesFromTheResolverNotFromTheRawBody() {
+    Gallery stored = gallery(1L, 100L);
+    when(galleryMapper.selectById(1L)).thenReturn(stored);
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    // 校验器返回的是去过空白的版本
+    stubBgm(SONG, "audio", ResourceType.photo);
+
+    Map<String, Object> body = new HashMap<>();
+    body.put("bgmSrc", "  " + SONG + "  ");
+    body.put("bgmType", "audio");
+    service().updateMetadata(1L, body, user(100L, "作者"));
+
+    assertEquals(SONG, stored.getBgmSrc());
+  }
+
+  /** 两个都给 null 是「清空」，而且这本身就是一次有效修改 */
+  @Test
+  void clearingTheBackgroundMusicIsAValidEditOnItsOwn() {
+    Gallery stored = gallery(1L, 100L);
+    stored.setBgmSrc(SONG);
+    stored.setBgmType("audio");
+    when(galleryMapper.selectById(1L)).thenReturn(stored);
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    when(bgmResolver.resolve(null, null, ResourceType.photo))
+        .thenReturn(new GalleryBgmResolver.Bgm(null, null));
+
+    Map<String, Object> body = new HashMap<>();
+    body.put("bgmSrc", null);
+    body.put("bgmType", null);
+    Result<GalleryMetadataVO> result = service().updateMetadata(1L, body, user(100L, "作者"));
+
+    assertEquals(200, result.getCode());
+    assertNull(stored.getBgmSrc());
+    assertNull(stored.getBgmType());
+    verify(galleryMapper).updateMetadata(stored);
+  }
+
+  /** 只给一边是调用方漏传，不是「清空」—— 猜错方向会静默清掉用户配好的曲子 */
+  @Test
+  void aHalfFilledBackgroundMusicPairIsRejected() {
+    Gallery stored = gallery(1L, 100L);
+    when(galleryMapper.selectById(1L)).thenReturn(stored);
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+
+    Map<String, Object> body = new HashMap<>();
+    body.put("bgmSrc", SONG);
+    Result<GalleryMetadataVO> result = service().updateMetadata(1L, body, user(100L, "作者"));
+
+    assertEquals(400, result.getCode());
+    assertEquals("背景音乐参数不完整，bgmSrc 与 bgmType 必须同时提供", result.getMsg());
+    verify(galleryMapper, never()).updateMetadata(any());
+    verify(bgmResolver, never()).resolve(any(), any(), any());
+  }
+
+  @Test
+  void aRejectedBackgroundMusicStopsTheWholeEdit() {
+    Gallery stored = gallery(1L, 100L);
+    when(galleryMapper.selectById(1L)).thenReturn(stored);
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    when(bgmResolver.resolve(any(), any(), any()))
+        .thenThrow(new IllegalArgumentException("背景音乐必须是本功能上传的地址，或画廊里已有资源的地址"));
+
+    Map<String, Object> body = new HashMap<>();
+    body.put("title", "新标题");
+    body.put("bgmSrc", "https://evil.test/a.mp3");
+    body.put("bgmType", "audio");
+    Result<GalleryMetadataVO> result = service().updateMetadata(1L, body, user(100L, "作者"));
+
+    assertEquals(400, result.getCode());
+    assertEquals("背景音乐必须是本功能上传的地址，或画廊里已有资源的地址", result.getMsg());
+    // 标题那半边也不能落库：一次请求要么整体成功、要么什么都没改
+    assertEquals("旧标题", stored.getTitle());
     verify(galleryMapper, never()).updateMetadata(any());
   }
 

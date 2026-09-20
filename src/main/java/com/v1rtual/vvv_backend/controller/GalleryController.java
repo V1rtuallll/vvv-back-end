@@ -118,7 +118,12 @@ public class GalleryController {
     return queryService.isLiked(id, currentUser());
   }
 
-  /** 只接受 title / description / alt / tags / category，其余字段由服务端忽略 */
+  /**
+   * 只接受 title / description / alt / tags / category / bgmSrc / bgmType，
+   * 其余字段由服务端忽略。
+   *
+   * bgmSrc 与 bgmType 必须同时出现：只给一边返回 400；两个都给 null 表示清空 BGM。
+   */
   @PatchMapping("/{id}")
   public Result<GalleryMetadataVO> updateGallery(
       @PathVariable Long id,

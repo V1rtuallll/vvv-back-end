@@ -40,6 +40,8 @@ class GalleryBgmMediaMapperContractTest {
   void insertionRecordsTheObjectKeyAndTheUploader() throws NoSuchMethodException {
     String sql = sqlOf("insert", GalleryBgmMedia.class);
 
+    // 带上左括号：只写表名的话，gallery_bgm_media_wrong 这种同前缀的错表也能通过
+    assertTrue(sql.contains("INTO GALLERY_BGM_MEDIA ("), "INSERT 必须写进登记表: " + sql);
     assertTrue(sql.contains("OBJECT_KEY"), sql);
     assertTrue(sql.contains("UPLOADER_ID"), sql);
   }

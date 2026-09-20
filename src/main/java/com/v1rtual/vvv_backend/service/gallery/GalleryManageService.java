@@ -116,6 +116,11 @@ public class GalleryManageService {
     if (gallery == null) return Result.error(404, "资源不存在");
     if (!canManage(gallery.getUserId(), currentUser)) return Result.error(403, OwnerAccess.DENIED_MESSAGE);
 
+    // 位置很关键：必须在删库与删 OSS **之前**。放到后面，这条项以及它的 OSS 对象
+    // 都已经没了，再返回拒绝也没意义 —— 配了它的那些图从那一刻起就静默变哑了。
+    Result<Void> blocked = blockIfUsedAsBgm(gallery.getSrc());
+    if (blocked != null) return blocked;
+
     // 幂等：并发重复删除时后一个请求拿到的行数会是 0
     if (deletionService.deleteGallery(gallery) == 0) return Result.error(404, "资源不存在");
 
@@ -123,6 +128,25 @@ public class GalleryManageService {
       return Result.error(500, "资源已删除，但 OSS 对象清理失败，已记录待重试");
     }
     return Result.success("删除成功");
+  }
+
+  /**
+   * 这个 OSS 对象还被别的图当背景音乐用吗。
+   *
+   * 删除一条项会连它的 OSS 对象一起删掉（见 {@link #deleteOssObject}），
+   * 而删掉之后所有配了它的图都会**静默静音**：页面不报错，就是没声音。
+   * 这类故障不会有人去排查，所以宁可在删除这一步拦下来。
+   *
+   * 只查 bgm_src 一列：地址是拷贝出来的（D2），没有指向源项的引用，
+   * 「谁在用」这个问题只能反着查回来。
+   *
+   * @return 被引用时返回拒绝结果；没被引用时返回 null
+   */
+  private Result<Void> blockIfUsedAsBgm(String src) {
+    if (StringUtils.isBlank(src)) return null;
+    long used = galleryMapper.countByBgmSrc(src);
+    if (used <= 0) return null;
+    return Result.error(409, "这首曲子被 " + used + " 张图用作背景音乐，请先取消它们的背景音乐");
   }
 
   public Result<Void> deleteComment(Long commentId, User currentUser) {
@@ -158,6 +182,10 @@ public class GalleryManageService {
     if (!canManage(gallery.getUserId(), currentUser)) {
       return Result.error(403, OwnerAccess.DENIED_MESSAGE);
     }
+    // 这里刻意**不**做 BGM 引用检查，与 deleteGallery 不同：
+    // cancelUpload 只处理刚刚这一次上传，那个资源从来没人见过
+    //（它要等上传跑完、列表刷新之后才可能被别人挑中），不可能已经被人配成 BGM。
+    // 真到了「它已经被人配上」的状态，走的是删除路径，那里有闸。
     // 并发下另一个请求已经删掉了，同样视为成功
     if (deletionService.deleteGallery(gallery) == 0) return Result.success("这次上传没有产生资源");
 

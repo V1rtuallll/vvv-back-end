@@ -332,6 +332,84 @@ class GalleryManageServiceTest {
     verify(ossUtil, never()).deleteByPublicUrl(anyString());
   }
 
+  // ===== 删除保护：别把别人正在用的曲子删掉 =====
+
+  /**
+   * 被别的图当背景音乐时拒绝删除。
+   *
+   * 删项会连 OSS 对象一起删掉，删完之后所有配了它的图都会**静默静音** ——
+   * 页面不报错，就是没声音，没有任何地方会记一笔。所以必须在动手之前拦下来。
+   */
+  @Test
+  void refusesToDeleteAnObjectAnotherItemUsesAsBackgroundMusic() {
+    Gallery stored = gallery(1L, 100L);
+    when(galleryMapper.selectById(1L)).thenReturn(stored);
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    when(galleryMapper.countByBgmSrc(SRC)).thenReturn(3L);
+
+    Result<Void> result = service().deleteGallery(1L, user(100L, "作者"));
+
+    assertEquals(409, result.getCode());
+    assertTrue(result.getMsg().contains("3"),
+        "拒绝理由要说清被几张图占用，实际是：" + result.getMsg());
+    // 一条都还没删，OSS 也没动
+    verify(deletionService, never()).deleteGallery(any());
+    verify(ossUtil, never()).deleteByPublicUrl(anyString());
+  }
+
+  /**
+   * 顺序守卫：检查必须排在**任何**破坏性操作之前。
+   *
+   * 挪到 deletionService.deleteGallery 之后，数据库行已经没了，那时再返回 409
+   * 只是一句空话 —— 项从画廊里消失了，而 OSS 对象还在，直到某次清理把它删掉。
+   */
+  @Test
+  void checksForBackgroundMusicUseBeforeTouchingAnything() {
+    Gallery stored = gallery(1L, 100L);
+    when(galleryMapper.selectById(1L)).thenReturn(stored);
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    // 这里桩的是「**没**被引用」，不是「被引用」：这条用例要证明的是**顺序**，
+    // 所以两个破坏性调用必须真的发生，InOrder 才有东西可验。
+    // 桩成 1L 的话方法在守卫那一行就返回 409 了，后两条 verify 永远等不到调用 ——
+    // 用例从第一秒起就是红的，Step 6 的变异验证也随之失去意义。
+    when(galleryMapper.countByBgmSrc(SRC)).thenReturn(0L);
+    when(deletionService.deleteGallery(stored)).thenReturn(1);
+
+    service().deleteGallery(1L, user(100L, "作者"));
+
+    InOrder inOrder = inOrder(galleryMapper, deletionService, ossUtil);
+    inOrder.verify(galleryMapper).countByBgmSrc(SRC);
+    inOrder.verify(deletionService).deleteGallery(stored);
+    inOrder.verify(ossUtil).deleteByPublicUrl(SRC);
+  }
+
+  /** 没人在用时照常删，别把普通的删除也卡住 */
+  @Test
+  void deletesNormallyWhenNothingUsesTheObjectAsBackgroundMusic() {
+    Gallery stored = gallery(1L, 100L);
+    when(galleryMapper.selectById(1L)).thenReturn(stored);
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    when(galleryMapper.countByBgmSrc(SRC)).thenReturn(0L);
+    when(deletionService.deleteGallery(stored)).thenReturn(1);
+
+    Result<Void> result = service().deleteGallery(1L, user(100L, "作者"));
+
+    assertEquals(200, result.getCode());
+    verify(ossUtil).deleteByPublicUrl(SRC);
+  }
+
+  /** 越权的人在检查之前就被挡住了，不该白查一次库 */
+  @Test
+  void anOutsiderIsRejectedBeforeTheBackgroundMusicCheck() {
+    when(galleryMapper.selectById(1L)).thenReturn(gallery(1L, 100L));
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+
+    Result<Void> result = service().deleteGallery(1L, user(200L, "路人"));
+
+    assertEquals(403, result.getCode());
+    verify(galleryMapper, never()).countByBgmSrc(anyString());
+  }
+
   @Test
   void letsTheCommentAuthorDeleteOwnComment() {
     when(commentMapper.selectById(5L)).thenReturn(comment(5L, 100L));

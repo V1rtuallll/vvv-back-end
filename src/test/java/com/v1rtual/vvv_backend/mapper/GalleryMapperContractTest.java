@@ -62,4 +62,18 @@ class GalleryMapperContractTest {
     assertTrue(String.join(" ", annotation.value()).toUpperCase(Locale.ROOT).contains("INSERT IGNORE"),
         "点赞写入必须保留 INSERT IGNORE");
   }
+
+  /**
+   * 「挑背景音乐」的候选是两个析取的并集：music / video 项，以及自己已经配过 BGM 的项。
+   * 删掉任一个析取，SQL 照样执行、测试照样通过，只是线上悄悄少一批候选 ——
+   * 少了后一半，已经配过 BGM 的项再也选不到；少了前一半，没人能第一次配。
+   */
+  @Test
+  void bgmCandidateQueryKeepsBothMusicVideoItemsAndAlreadyAttachedOnes() throws NoSuchMethodException {
+    Method candidates = GalleryMapper.class.getMethod("selectBgmCandidates");
+
+    String sql = String.join(" ", candidates.getAnnotation(Select.class).value()).toUpperCase(Locale.ROOT);
+    assertTrue(sql.contains("TYPE IN ('MUSIC', 'VIDEO')"), "候选必须包含 music / video 项: " + sql);
+    assertTrue(sql.contains("BGM_SRC IS NOT NULL"), "候选必须包含已经配过背景音乐的项: " + sql);
+  }
 }

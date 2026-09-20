@@ -3,6 +3,9 @@ package com.v1rtual.vvv_backend.service.home;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.List;
 import java.util.Map;
 
@@ -12,6 +15,7 @@ import org.springframework.stereotype.Service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.v1rtual.vvv_backend.entity.HomeConfig;
+import com.v1rtual.vvv_backend.entity.Gallery;
 import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.mapper.GalleryMapper;
 import com.v1rtual.vvv_backend.mapper.HomeConfigMapper;
@@ -79,7 +83,12 @@ public class HomeQueryService {
     MediaTypeStrategy strategy = mediaTypeRegistry.find(type);
     if (strategy == null) return Result.error(400, "不支持的类型");
 
-    String src = MediaTypeStrategy.pick(exclude, strategy.count(), strategy::srcAt, PICK_ATTEMPTS);
+    // exclude 是逗号分隔的多个 src：首页要把下方 Random Gallery 已展示的整栏都避开，
+    // 只排一条的话「换一个」照样会撞上旁边那栏
+    Set<String> excluded = StringUtils.isBlank(exclude)
+        ? Set.of()
+        : Arrays.stream(exclude.split(",")).map(String::trim).filter(s -> !s.isEmpty()).collect(Collectors.toSet());
+    String src = MediaTypeStrategy.pick(excluded, strategy.count(), strategy::srcAt, PICK_ATTEMPTS);
     if (src == null) return Result.error(404, "暂无可用资源");
 
     Result<HomeMediaDetailVO> item = getFullItem(src, type);
@@ -96,7 +105,13 @@ public class HomeQueryService {
 
     // 上传者信息按 user_id 实时关联用户表，不用会过期的快照列
     User uploader = findUploader(metadata.uploaderId());
+
+    // 背景音乐只能从 gallery 表取：类型表没有 bgm 列，MediaMetadata 里也就带不出来。
+    // 按 src 关联 —— 首页展示的资源未必都在画廊里，关联不到就是没有 BGM，属正常情况，
+    // 不能当成错误。
+    Gallery galleryRow = galleryMapper.selectBySrc(src);
     return Result.success(HomeMediaDetailVO.builder()
+        .type(metadata.type())
         .src(src)
         .title(StringUtils.defaultString(metadata.title(), UNKNOWN))
         .description(StringUtils.defaultString(metadata.description(), UNKNOWN))
@@ -104,6 +119,9 @@ public class HomeQueryService {
         .uploaderAvatar(resolveAvatar(uploader))
         .uploaderUsername(resolveUsername(uploader, metadata.uploaderUsername()))
         .uploadTime(formatTimeOrUnknown(metadata.createdAt()))
+        .bgmSrc(galleryRow == null ? null : galleryRow.getBgmSrc())
+        .bgmType(galleryRow == null ? null : galleryRow.getBgmType())
+        .inGallery(galleryRow != null)
         .build(), "完整资源加载成功");
   }
 

@@ -57,6 +57,28 @@ public interface GalleryMapper {
    * 按 src 查行。gallery 与 photo/gif/video/music 以 src 关联，没有外键，
    * 后台编辑类型表后靠它定位需要同步的 gallery 行。
    */
+  /**
+   * 「画廊里的图片 / 动图」有多少条。
+   *
+   * 画廊的图文全在 photo 表，动图在 gif 表 —— 交集就是可以点进详情的那些。
+   * 用 UNION ALL 而不是两次往返：计数与取第 N 条必须基于同一个集合，
+   * 分开查的话两边可能落在不同的数据快照上，翻页会漏条或重复。
+   */
+  @Select("SELECT COUNT(*) FROM ("
+      + "SELECT p.id FROM photo p JOIN gallery g ON g.src = p.src "
+      + "UNION ALL "
+      + "SELECT f.id FROM gif f JOIN gallery g ON g.src = f.src"
+      + ") t")
+  long countGalleryMedia();
+
+  /** 上面那个集合里按 offset 取一条 src；越界返回 null */
+  @Select("SELECT src FROM ("
+      + "SELECT p.src AS src, p.id AS id FROM photo p JOIN gallery g ON g.src = p.src "
+      + "UNION ALL "
+      + "SELECT f.src AS src, f.id AS id FROM gif f JOIN gallery g ON g.src = f.src"
+      + ") t ORDER BY t.id LIMIT 1 OFFSET #{offset}")
+  String selectGalleryMediaSrcAt(@Param("offset") int offset);
+
   @Select("SELECT * FROM gallery WHERE src = #{src} LIMIT 1")
   Gallery selectBySrc(String src);
 

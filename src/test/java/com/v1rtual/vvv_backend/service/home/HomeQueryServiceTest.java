@@ -39,7 +39,7 @@ class HomeQueryServiceTest {
 
   private HomeQueryService service() {
     return new HomeQueryService(homeConfigMapper, new ObjectMapper(),
-        new MediaTypeRegistry(videoMapper, gifMapper, photoMapper), userService, galleryMapper);
+        new MediaTypeRegistry(videoMapper, gifMapper, photoMapper, galleryMapper), userService, galleryMapper);
   }
 
   private static Photo photo(String src, String title) {

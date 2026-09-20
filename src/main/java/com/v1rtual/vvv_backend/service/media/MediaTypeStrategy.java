@@ -1,6 +1,7 @@
 package com.v1rtual.vvv_backend.service.media;
 
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.IntFunction;
 
@@ -29,10 +30,13 @@ public interface MediaTypeStrategy {
   MediaMetadata findBySrc(String src);
 
   /**
-   * 尽力避开 exclude 的随机 src：最多重试 attempts 次，
-   * 库里只剩这一条时返回它而不是报错。
+   * 尽力避开 exclude 里任意一条的随机 src：最多重试 attempts 次，
+   * 池子被抽干时返回最后跳过的那条而不是报错。
+   *
+   * 收一个集合而不是单个 src：首页要避开的不是一条，而是**下方 Random Gallery
+   * 已经展示的那几条** —— 传单条的话，换一个照样可能撞上旁边那栏。
    */
-  static String pick(String exclude, long total, IntFunction<String> srcAt, int attempts) {
+  static String pick(Set<String> exclude, long total, IntFunction<String> srcAt, int attempts) {
     if (total <= 0) return null;
     int bound = (int) Math.min(total, Integer.MAX_VALUE);
     ThreadLocalRandom random = ThreadLocalRandom.current();
@@ -40,7 +44,7 @@ public interface MediaTypeStrategy {
     for (int attempt = 0; attempt < attempts; attempt++) {
       String src = srcAt.apply(random.nextInt(bound));
       if (src == null) continue;
-      if (exclude == null || !exclude.equals(src)) return src;
+      if (exclude == null || exclude.isEmpty() || !exclude.contains(src)) return src;
       skipped = src;
     }
     return skipped;

@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.boot.autoconfigure.web.servlet.MultipartProperties;
 import org.springframework.mock.web.MockMultipartFile;
 
@@ -140,6 +141,33 @@ class AdminMediaServiceTest {
     assertEquals("新标题", galleryRow.getTitle());
     assertEquals("新描述", galleryRow.getDescription());
     verify(galleryMapper).updateMetadata(galleryRow);
+  }
+
+  /**
+   * updateMetadata 是无条件写 bgm_src / bgm_type 的，所以「后台编辑没有动 BGM」这句
+   * 全靠传进去的实体带着旧值 —— 它是 selectBySrc（SELECT *）读出来的。
+   * 这里把这条钉住：实体交回 mapper 时，那两个字段与读到的一致。
+   */
+  @Test
+  void adminEditHandsTheBackgroundMusicBackToTheMapperUntouched() {
+    PhotoMapper photoMapper = mock(PhotoMapper.class);
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    when(photoMapper.selectById(7L)).thenReturn(Photo.builder().id(7L)
+        .src("https://example.test/imgs/a.png").build());
+    Gallery galleryRow = Gallery.builder().id(42L).src("https://example.test/imgs/a.png")
+        .bgmSrc("https://example.test/music/a.mp3").bgmType("audio").build();
+    when(galleryMapper.selectBySrc("https://example.test/imgs/a.png")).thenReturn(galleryRow);
+    AdminMediaService service = new AdminMediaService(mock(OssUtil.class), mock(VideoMapper.class),
+        mock(GifMapper.class), mock(MusicMapper.class), photoMapper, mock(AdminMediaMapper.class),
+        galleryMapper, new UploadValidator(new MultipartProperties()));
+
+    Result<Void> result = service.update(Map.of("id", 7L, "type", "photo", "filename", "新标题"));
+
+    assertEquals(200, result.getCode());
+    ArgumentCaptor<Gallery> saved = ArgumentCaptor.forClass(Gallery.class);
+    verify(galleryMapper).updateMetadata(saved.capture());
+    assertEquals("https://example.test/music/a.mp3", saved.getValue().getBgmSrc());
+    assertEquals("audio", saved.getValue().getBgmType());
   }
 
   /** 类型表里有、gallery 表里没有的历史数据：记录日志即可，不应让编辑失败。 */

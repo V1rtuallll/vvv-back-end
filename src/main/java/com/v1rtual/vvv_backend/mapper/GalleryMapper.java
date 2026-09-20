@@ -89,6 +89,20 @@ public interface GalleryMapper {
   long countByBgmSrc(@Param("src") String src);
 
   /**
+   * 「挑一首背景音乐」的候选：所有 music / video 项，外加自己配过 BGM 的图文项。
+   *
+   * 后一半是个便利：同一首曲子可以被另一张图再用一次（D2 决定了这是「拷贝地址」，
+   * 不是共享引用，所以源项改了什么都不会传播）。
+   *
+   * 条件写成一条 SQL 里的 IN + OR，不接 type 参数 —— 接参数的话，调用方漏传一次
+   * 就静默退化成「把全部画廊资源都当候选」，其中包括一堆配不了 BGM 的图。
+   */
+  @Select("SELECT * FROM gallery " +
+      "WHERE type IN ('music', 'video') OR bgm_src IS NOT NULL " +
+      "ORDER BY created_at DESC")
+  List<Gallery> selectBgmCandidates();
+
+  /**
    * 只改 src。src 是 gallery 与类型表之间的关联键，替换文件时必须两张表一起改，
    * 所以单独开一个方法，而不是走 updateMetadata 的元数据白名单。
    */

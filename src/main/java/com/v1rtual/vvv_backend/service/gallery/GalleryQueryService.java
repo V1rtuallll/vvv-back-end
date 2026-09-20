@@ -68,6 +68,30 @@ public class GalleryQueryService {
   }
 
   /**
+   * 「挑一首背景音乐」的候选列表。
+   *
+   * 映射复用 {@link #toItem}，与画廊列表同一个形状 —— 前端因此只有一套渲染逻辑，
+   * 选曲界面不用为另一种 VO 再写一遍字段解析。
+   *
+   * 不分页：候选是「画廊里有声音的项」，个人站达不到需要翻页的规模。
+   */
+  public Result<List<GalleryItemVO>> bgmCandidates() {
+    List<Gallery> candidates = galleryMapper.selectBgmCandidates();
+    Set<Long> userIds = candidates.stream().map(Gallery::getUserId).filter(Objects::nonNull)
+        .collect(Collectors.toSet());
+    Map<Long, User> userMap = new HashMap<>();
+    if (!userIds.isEmpty()) {
+      userMapper.selectByIds(new ArrayList<>(userIds)).forEach(user -> userMap.put(user.getId(), user));
+    }
+
+    // 选曲界面不展示评论数，传 0：不为一次挑歌白跑一遍聚合查询
+    List<GalleryItemVO> items = candidates.stream()
+        .map(gallery -> toItem(gallery, userMap.get(gallery.getUserId()), 0L))
+        .collect(Collectors.toList());
+    return Result.success(items, "加载成功");
+  }
+
+  /**
    * 不传 type、传空白或 all 都表示不过滤。
    */
   private boolean isTypeUnfiltered(String type) {

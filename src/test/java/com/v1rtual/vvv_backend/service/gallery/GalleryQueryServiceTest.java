@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test;
 
 import com.v1rtual.vvv_backend.entity.Gallery;
 import com.v1rtual.vvv_backend.entity.ResourceType;
+import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.mapper.CommentLikeMapper;
 import com.v1rtual.vvv_backend.mapper.CommentMapper;
 import com.v1rtual.vvv_backend.mapper.GalleryLikeMapper;
@@ -162,6 +163,53 @@ class GalleryQueryServiceTest {
     assertEquals("audio", items.get(0).getBgmType());
     assertNull(items.get(1).getBgmSrc());
     assertNull(items.get(1).getBgmType());
+  }
+
+  /**
+   * 候选与画廊列表必须是同一个形状。
+   *
+   * 前端只有一套渲染逻辑，两边形状不一致时会得到一堆读不出来的字段 ——
+   * 而页面不报错，只是列表里每一行的信息都是空的。
+   */
+  @Test
+  void bgmCandidatesUseTheSameShapeAsTheGalleryList() {
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    Gallery song = Gallery.builder().id(1L).type(ResourceType.music).title("一首歌").userId(7L)
+        .src("https://bucket.example.test/music/a.mp3").build();
+    Gallery withBgm = Gallery.builder().id(2L).type(ResourceType.photo).title("配过曲子的图").userId(7L)
+        .src("https://bucket.example.test/imgs/b.png")
+        .bgmSrc("https://bucket.example.test/music/a.mp3").bgmType("audio").build();
+    when(galleryMapper.selectBgmCandidates()).thenReturn(List.of(song, withBgm));
+    UserMapper userMapper = mock(UserMapper.class);
+    User uploader = new User();
+    uploader.setId(7L);
+    uploader.setUsername("u7");
+    when(userMapper.selectByIds(List.of(7L))).thenReturn(List.of(uploader));
+    GalleryQueryService service = new GalleryQueryService(galleryMapper, mock(CommentMapper.class),
+        userMapper, mock(CommentLikeMapper.class), mock(GalleryLikeMapper.class));
+
+    Result<List<GalleryItemVO>> result = service.bgmCandidates();
+
+    assertEquals(200, result.getCode());
+    List<GalleryItemVO> items = result.getData();
+    assertEquals(2, items.size());
+    assertEquals("music", items.get(0).getType());
+    assertEquals("u7", items.get(0).getUploaderUsername());
+    // 配过 BGM 的图文项带着那一对值，前端的 resolveBgm 才能从中取出曲子
+    assertEquals("https://bucket.example.test/music/a.mp3", items.get(1).getBgmSrc());
+    assertEquals("audio", items.get(1).getBgmType());
+  }
+
+  /** 选曲界面不展示评论数，不该为一次挑歌白跑一遍聚合查询 */
+  @Test
+  void bgmCandidatesDoNotPayForCommentCounts() {
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    when(galleryMapper.selectBgmCandidates()).thenReturn(List.of());
+    CommentMapper commentMapper = mock(CommentMapper.class);
+    GalleryQueryService service = service(galleryMapper, commentMapper);
+
+    assertEquals(200, service.bgmCandidates().getCode());
+    verifyNoInteractions(commentMapper);
   }
 
   @Test

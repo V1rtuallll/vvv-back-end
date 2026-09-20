@@ -98,6 +98,15 @@ public class GalleryController {
     return queryService.list(page, limit, type);
   }
 
+  /**
+   * 「挑一首背景音乐」的候选列表：有声音的项，外加自己配过 BGM 的图文项。
+   * 不分页，理由见 GalleryQueryService#bgmCandidates。
+   */
+  @GetMapping("/bgm-candidates")
+  public Result<List<GalleryItemVO>> bgmCandidates() {
+    return queryService.bgmCandidates();
+  }
+
   @PostMapping("/like")
   public Result<Void> like(@RequestBody Map<String, Long> body) {
     return interactionService.like(body, currentUser());

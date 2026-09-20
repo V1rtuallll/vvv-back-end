@@ -303,6 +303,9 @@ public class GalleryUploadService {
     media.setUrl(url);
     // 对象键在这里就写进库，将来清理时直接取用，不再从地址反推
     media.setObjectKey(ossUtil.objectKeyOf(url));
+    // 原始文件名与对象键不同：键是 UUID，认不出任何东西。名字只在「上传的这一刻」
+    // 还拿得到，错过了就永久丢了 —— 详情里那首曲子叫什么，全靠这一行
+    media.setTitle(file.getOriginalFilename());
     media.setUploaderId(user.getId());
     galleryBgmMediaMapper.insert(media);
 

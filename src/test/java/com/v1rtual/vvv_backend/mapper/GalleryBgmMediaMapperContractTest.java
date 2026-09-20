@@ -46,6 +46,17 @@ class GalleryBgmMediaMapperContractTest {
     assertTrue(sql.contains("UPLOADER_ID"), sql);
   }
 
+  /**
+   * 原始文件名也要一起落库。它是详情里那首曲子唯一的可读名字 ——
+   * 漏了这一列，功能照常工作，只是所有「上传新文件」传的曲子都显示不出名字。
+   */
+  @Test
+  void insertionRecordsTheOriginalFileName() throws NoSuchMethodException {
+    String sql = sqlOf("insert", GalleryBgmMedia.class);
+
+    assertTrue(sql.contains("TITLE"), sql);
+  }
+
   private static String sqlOf(String name, Class<?>... parameterTypes) throws NoSuchMethodException {
     Method method = GalleryBgmMediaMapper.class.getMethod(name, parameterTypes);
     for (Class<?> annotationType : List.of(Select.class, Insert.class, Update.class, Delete.class)) {

@@ -103,6 +103,22 @@ public interface GalleryMapper {
   List<Gallery> selectBgmCandidates();
 
   /**
+   * 批量取「地址 → 标题」，供详情显示 BGM 的名字。
+   *
+   * 一首曲子被选作 BGM 时拷的是地址，所以这条查询是「这条项配的曲子是哪一条画廊项」的
+   * 反查。查不到很正常 —— 经「上传新文件」进来的曲子不在这张表里，由登记表兜底。
+   *
+   * 不按 id 取、也不逐条查：一页里可能有十几条 BGM，逐条查就是十几次往返。
+   */
+  @Select({"<script>",
+      "SELECT src, title FROM gallery WHERE src IN ",
+      "<foreach collection='srcs' item='src' open='(' separator=',' close=')'>",
+      "#{src}",
+      "</foreach>",
+      "</script>"})
+  List<Map<String, Object>> selectTitlesBySrcs(@Param("srcs") List<String> srcs);
+
+  /**
    * 只改 src。src 是 gallery 与类型表之间的关联键，替换文件时必须两张表一起改，
    * 所以单独开一个方法，而不是走 updateMetadata 的元数据白名单。
    */

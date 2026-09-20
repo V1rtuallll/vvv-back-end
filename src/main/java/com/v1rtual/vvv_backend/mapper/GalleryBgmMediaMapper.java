@@ -1,5 +1,8 @@
 package com.v1rtual.vvv_backend.mapper;
 
+import java.util.List;
+import java.util.Map;
+
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Options;
@@ -18,8 +21,8 @@ import com.v1rtual.vvv_backend.entity.GalleryBgmMedia;
 @Mapper
 public interface GalleryBgmMediaMapper {
 
-  @Insert("INSERT INTO gallery_bgm_media (url, object_key, uploader_id, created_at) " +
-      "VALUES (#{url}, #{objectKey}, #{uploaderId}, NOW())")
+  @Insert("INSERT INTO gallery_bgm_media (url, object_key, title, uploader_id, created_at) " +
+      "VALUES (#{url}, #{objectKey}, #{title}, #{uploaderId}, NOW())")
   @Options(useGeneratedKeys = true, keyProperty = "id")
   int insert(GalleryBgmMedia media);
 
@@ -29,4 +32,20 @@ public interface GalleryBgmMediaMapper {
    */
   @Select("SELECT * FROM gallery_bgm_media WHERE url = #{url}")
   GalleryBgmMedia selectByUrl(@Param("url") String url);
+
+  /**
+   * 批量取「地址 → 显示名」，供详情展示用。
+   *
+   * 与 {@link #selectByUrl} 是两件事，不要合并：那个管归属判定，必须整串等值、
+   * 必须一次一条；这个只管显示，允许批量、也允许查不到（查不到就是没名字）。
+   *
+   * 列表一页最多 100 条，所以 IN 的规模有上界，不会长成一次超长查询。
+   */
+  @Select({"<script>",
+      "SELECT url, title FROM gallery_bgm_media WHERE url IN ",
+      "<foreach collection='urls' item='url' open='(' separator=',' close=')'>",
+      "#{url}",
+      "</foreach>",
+      "</script>"})
+  List<Map<String, Object>> selectTitlesByUrls(@Param("urls") List<String> urls);
 }

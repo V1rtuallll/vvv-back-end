@@ -24,6 +24,14 @@ public class GalleryBgmMedia {
   /** bucket 内的对象键，将来清理时直接用这个值，不再从地址反推。 */
   private String objectKey;
 
+  /**
+   * 上传时的原始文件名，仅供显示。
+   *
+   * 这是这首曲子唯一的可读名字：对象键是 UUID，从地址里认不出任何东西。
+   * 只在页面显示时读，不参与归属判定 —— 判定看的是 {@link #url} 整串等值。
+   */
+  private String title;
+
   /** 上传者。上传接口在取不到当前用户时直接返回 401，所以这一列不可能为空。 */
   private Long uploaderId;
 

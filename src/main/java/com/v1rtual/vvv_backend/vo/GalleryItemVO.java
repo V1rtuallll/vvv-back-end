@@ -35,4 +35,12 @@ public class GalleryItemVO {
    */
   private String bgmSrc;
   private String bgmType;
+
+  /**
+   * 背景音乐的显示名，取不到时为 null。
+   *
+   * 仅供详情里显示「现在放的是哪一首」。前端的播放逻辑一个字都不看它 ——
+   * 所以它缺失时播放照常，只是那行字少一截。
+   */
+  private String bgmTitle;
 }

@@ -9,6 +9,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Service;
 
 import com.v1rtual.vvv_backend.entity.Comment;
@@ -17,6 +18,7 @@ import com.v1rtual.vvv_backend.entity.ResourceType;
 import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.mapper.CommentLikeMapper;
 import com.v1rtual.vvv_backend.mapper.CommentMapper;
+import com.v1rtual.vvv_backend.mapper.GalleryBgmMediaMapper;
 import com.v1rtual.vvv_backend.mapper.GalleryLikeMapper;
 import com.v1rtual.vvv_backend.mapper.GalleryMapper;
 import com.v1rtual.vvv_backend.mapper.UserMapper;
@@ -36,6 +38,7 @@ public class GalleryQueryService {
   private final UserMapper userMapper;
   private final CommentLikeMapper commentLikeMapper;
   private final GalleryLikeMapper galleryLikeMapper;
+  private final GalleryBgmMediaMapper galleryBgmMediaMapper;
 
   public Result<PageResultVO<GalleryItemVO>> list(int page, int limit, String type) {
     if (!PageParams.isValid(page, limit)) {
@@ -55,10 +58,11 @@ public class GalleryQueryService {
       userMapper.selectByIds(new ArrayList<>(userIds)).forEach(user -> userMap.put(user.getId(), user));
     }
     Map<Long, Long> commentCounts = countCommentsByGalleryId(galleryList);
+    Map<String, String> bgmTitles = resolveBgmTitles(galleryList);
 
     List<GalleryItemVO> items = galleryList.stream()
         .map(gallery -> toItem(gallery, userMap.get(gallery.getUserId()),
-            commentCounts.getOrDefault(gallery.getId(), 0L)))
+            commentCounts.getOrDefault(gallery.getId(), 0L), bgmTitles.get(gallery.getBgmSrc())))
         .collect(Collectors.toList());
 
     return Result.success(PageResultVO.<GalleryItemVO>builder()
@@ -84,9 +88,10 @@ public class GalleryQueryService {
       userMapper.selectByIds(new ArrayList<>(userIds)).forEach(user -> userMap.put(user.getId(), user));
     }
 
-    // 选曲界面不展示评论数，传 0：不为一次挑歌白跑一遍聚合查询
+    // 选曲界面不展示评论数，传 0：不为一次挑歌白跑一遍聚合查询。
+    // BGM 名字同理传 null —— 选曲界面列的是候选自己，它配过什么曲子不在这一屏里。
     List<GalleryItemVO> items = candidates.stream()
-        .map(gallery -> toItem(gallery, userMap.get(gallery.getUserId()), 0L))
+        .map(gallery -> toItem(gallery, userMap.get(gallery.getUserId()), 0L, null))
         .collect(Collectors.toList());
     return Result.success(items, "加载成功");
   }
@@ -121,7 +126,7 @@ public class GalleryQueryService {
    * @param commentCount 评论数。候选列表不展示评论数，调用方传 0，
    *                     免得为一次选曲的操作白跑一遍聚合查询。
    */
-  private GalleryItemVO toItem(Gallery gallery, User uploader, long commentCount) {
+  private GalleryItemVO toItem(Gallery gallery, User uploader, long commentCount, String bgmTitle) {
     return GalleryItemVO.builder()
         .id(gallery.getId())
         .type(gallery.getType() == null ? null : gallery.getType().name())
@@ -138,7 +143,44 @@ public class GalleryQueryService {
             : "/default-avatar.gif")
         .bgmSrc(gallery.getBgmSrc())
         .bgmType(gallery.getBgmType())
+        .bgmTitle(bgmTitle)
         .build();
+  }
+
+  /**
+   * 整页 BGM 的显示名，一次查完。
+   *
+   * 名字有两个来源，按优先级取：
+   *   1. 曲子取自某条画廊项 → 用那条项的标题（用户当初写在画廊里的名字）；
+   *   2. 否则问登记表 → 上传时记下的原始文件名。
+   *
+   * 两条查询都只在页面上真的出现 BGM 时才发，地址先去过重：一页里 12 条配同一首曲子的图
+   * 不该变成 12 次往返。查不到的地址不入 Map，取值时自然得到 null，前端退化成只显示类型。
+   */
+  private Map<String, String> resolveBgmTitles(List<Gallery> galleryList) {
+    List<String> bgmSrcs = galleryList.stream().map(Gallery::getBgmSrc)
+        .filter(StringUtils::isNotBlank).distinct().collect(Collectors.toList());
+    // 不能返回 Map.of()：不可变 Map 的 get(null) 直接抛 NPE，而没配 BGM 的行
+    // getBgmSrc() 返回的正是 null —— 取值那一步会把整页 500 掉。
+    if (bgmSrcs.isEmpty()) return new HashMap<>();
+
+    Map<String, String> titles = new HashMap<>();
+    collectTitles(titles, galleryMapper.selectTitlesBySrcs(bgmSrcs), "src");
+    // 登记表兜底，且不覆盖上一步的结果：能查到画廊项说明曲子本来就是画廊资源
+    collectTitles(titles, galleryBgmMediaMapper.selectTitlesByUrls(bgmSrcs), "url");
+    return titles;
+  }
+
+  /** 把一条批量查询的结果并进名字表。空标题不入表 —— 前端拿空串会显示成一个空的尾巴。 */
+  private void collectTitles(Map<String, String> titles, List<Map<String, Object>> rows,
+      String addressColumn) {
+    if (rows == null) return;
+    rows.forEach(row -> {
+      if (row.get(addressColumn) instanceof String address && row.get("title") instanceof String name
+          && StringUtils.isNotBlank(name)) {
+        titles.putIfAbsent(address, name);
+      }
+    });
   }
 
   /**

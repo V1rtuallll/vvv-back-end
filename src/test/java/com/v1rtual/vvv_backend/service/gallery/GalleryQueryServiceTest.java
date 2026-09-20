@@ -26,6 +26,7 @@ import com.v1rtual.vvv_backend.entity.ResourceType;
 import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.mapper.CommentLikeMapper;
 import com.v1rtual.vvv_backend.mapper.CommentMapper;
+import com.v1rtual.vvv_backend.mapper.GalleryBgmMediaMapper;
 import com.v1rtual.vvv_backend.mapper.GalleryLikeMapper;
 import com.v1rtual.vvv_backend.mapper.GalleryMapper;
 import com.v1rtual.vvv_backend.mapper.UserMapper;
@@ -165,6 +166,132 @@ class GalleryQueryServiceTest {
     assertNull(items.get(1).getBgmType());
   }
 
+  private static final String SONG = "https://bucket.example.test/music/a.mp3";
+  private static final String OTHER_SONG = "https://bucket.example.test/music/b.mp3";
+
+  private static Gallery photoWithBgm(long id, ResourceType type, String bgmSrc) {
+    return Gallery.builder().id(id).type(type).userId(null).bgmSrc(bgmSrc).bgmType("audio").build();
+  }
+
+  /**
+   * 详情要显示这首曲子叫什么。BGM 取自画廊里某条现有项时，那条项的标题就是它的名字 ——
+   * 这条路径不花额外代价：曲子本来就是画廊里的一条资源。
+   */
+  @Test
+  void namesTheBackgroundMusicAfterTheGalleryItemItWasTakenFrom() {
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    when(galleryMapper.selectPage(0L, 12, null))
+        .thenReturn(List.of(photoWithBgm(1L, ResourceType.photo, SONG)));
+    when(galleryMapper.selectTitlesBySrcs(List.of(SONG)))
+        .thenReturn(List.of(Map.of("src", SONG, "title", "一首歌")));
+    GalleryQueryService service = service(galleryMapper, mock(CommentMapper.class));
+
+    List<GalleryItemVO> items = service.list(1, 12, null).getData().getList();
+
+    assertEquals("一首歌", items.get(0).getBgmTitle());
+  }
+
+  /**
+   * 经「上传新文件」进来的 BGM 不在 gallery 表里，名字只存在登记表上 ——
+   * 上传时把原始文件名记了下来。少了这一支，自己传的曲子永远显示不出名字。
+   */
+  @Test
+  void fallsBackToTheNameRecordedWhenTheBackgroundMusicWasUploaded() {
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    when(galleryMapper.selectPage(0L, 12, null))
+        .thenReturn(List.of(photoWithBgm(1L, ResourceType.photo, SONG)));
+    when(galleryMapper.selectTitlesBySrcs(List.of(SONG))).thenReturn(List.of());
+    GalleryBgmMediaMapper bgmMediaMapper = mock(GalleryBgmMediaMapper.class);
+    when(bgmMediaMapper.selectTitlesByUrls(List.of(SONG)))
+        .thenReturn(List.of(Map.of("url", SONG, "title", "Lexapro Delirium.mp3")));
+    GalleryQueryService service = service(galleryMapper, mock(CommentMapper.class), bgmMediaMapper);
+
+    List<GalleryItemVO> items = service.list(1, 12, null).getData().getList();
+
+    assertEquals("Lexapro Delirium.mp3", items.get(0).getBgmTitle());
+  }
+
+  /**
+   * 两个来源都不认识这个地址时名字留空，前端退化成只显示类型。
+   *
+   * 编一个假名字比留空更糟：用户点开一听，放的和写的不是同一首，而且没有任何地方会报错。
+   */
+  @Test
+  void leavesTheNameNullWhenNeitherSourceKnowsTheAddress() {
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    when(galleryMapper.selectPage(0L, 12, null))
+        .thenReturn(List.of(photoWithBgm(1L, ResourceType.photo, SONG)));
+    when(galleryMapper.selectTitlesBySrcs(List.of(SONG))).thenReturn(List.of());
+    GalleryBgmMediaMapper bgmMediaMapper = mock(GalleryBgmMediaMapper.class);
+    when(bgmMediaMapper.selectTitlesByUrls(List.of(SONG))).thenReturn(List.of());
+    GalleryQueryService service = service(galleryMapper, mock(CommentMapper.class), bgmMediaMapper);
+
+    List<GalleryItemVO> items = service.list(1, 12, null).getData().getList();
+
+    assertNull(items.get(0).getBgmTitle());
+  }
+
+  /**
+   * 整页的 BGM 名字一次查完，不逐条查。
+   *
+   * 同一个地址在一页里出现多次时只查一次 —— 12 条配了同一首曲子的图不该产生 12 次往返。
+   */
+  @Test
+  void looksUpEveryBackgroundMusicOnThePageInOneGo() {
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    when(galleryMapper.selectPage(0L, 12, null)).thenReturn(List.of(
+        photoWithBgm(1L, ResourceType.photo, SONG),
+        photoWithBgm(2L, ResourceType.gif, OTHER_SONG),
+        photoWithBgm(3L, ResourceType.photo, SONG)));
+    when(galleryMapper.selectTitlesBySrcs(List.of(SONG, OTHER_SONG)))
+        .thenReturn(List.of(Map.of("src", SONG, "title", "一首歌"),
+            Map.of("src", OTHER_SONG, "title", "另一首")));
+    GalleryQueryService service = service(galleryMapper, mock(CommentMapper.class));
+
+    List<GalleryItemVO> items = service.list(1, 12, null).getData().getList();
+
+    verify(galleryMapper, times(1)).selectTitlesBySrcs(List.of(SONG, OTHER_SONG));
+    assertEquals("一首歌", items.get(0).getBgmTitle());
+    assertEquals("另一首", items.get(1).getBgmTitle());
+    assertEquals("一首歌", items.get(2).getBgmTitle());
+  }
+
+  /**
+   * 没配 BGM 的行不能让整页崩掉。
+   *
+   * 每一行都要拿自己的 bgmSrc 去名字表里查一次，没配 BGM 时那个值是 null。
+   * 名字表为空时若用 Map.of() 兜底，get(null) 会抛 NPE —— 「一页里一条 BGM 都没有」
+   * 这个最常见的场景直接 500，而配了 BGM 的页面反而正常。
+   */
+  @Test
+  void aPageWithoutAnyBackgroundMusicStillRenders() {
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    when(galleryMapper.selectPage(0L, 12, null)).thenReturn(List.of(
+        Gallery.builder().id(1L).type(ResourceType.photo).userId(null).title("没配曲子").build()));
+    GalleryQueryService service = service(galleryMapper, mock(CommentMapper.class));
+
+    List<GalleryItemVO> items = service.list(1, 12, null).getData().getList();
+
+    assertEquals(1, items.size());
+    assertEquals("没配曲子", items.get(0).getTitle());
+    assertNull(items.get(0).getBgmTitle());
+  }
+
+  /** 一页里一条 BGM 都没有时不该白跑两条查询 */
+  @Test
+  void skipsTheNameLookupsWhenNoItemOnThePageHasABackgroundMusic() {
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    when(galleryMapper.selectPage(0L, 12, null))
+        .thenReturn(List.of(Gallery.builder().id(1L).type(ResourceType.photo).userId(null).build()));
+    GalleryBgmMediaMapper bgmMediaMapper = mock(GalleryBgmMediaMapper.class);
+    GalleryQueryService service = service(galleryMapper, mock(CommentMapper.class), bgmMediaMapper);
+
+    service.list(1, 12, null);
+
+    verify(galleryMapper, never()).selectTitlesBySrcs(anyList());
+    verifyNoInteractions(bgmMediaMapper);
+  }
+
   /**
    * 候选与画廊列表必须是同一个形状。
    *
@@ -186,7 +313,8 @@ class GalleryQueryServiceTest {
     uploader.setUsername("u7");
     when(userMapper.selectByIds(List.of(7L))).thenReturn(List.of(uploader));
     GalleryQueryService service = new GalleryQueryService(galleryMapper, mock(CommentMapper.class),
-        userMapper, mock(CommentLikeMapper.class), mock(GalleryLikeMapper.class));
+        userMapper, mock(CommentLikeMapper.class), mock(GalleryLikeMapper.class),
+        mock(GalleryBgmMediaMapper.class));
 
     Result<List<GalleryItemVO>> result = service.bgmCandidates();
 
@@ -226,8 +354,13 @@ class GalleryQueryServiceTest {
   }
 
   private GalleryQueryService service(GalleryMapper galleryMapper, CommentMapper commentMapper) {
+    return service(galleryMapper, commentMapper, mock(GalleryBgmMediaMapper.class));
+  }
+
+  private GalleryQueryService service(GalleryMapper galleryMapper, CommentMapper commentMapper,
+      GalleryBgmMediaMapper galleryBgmMediaMapper) {
     return new GalleryQueryService(galleryMapper, commentMapper, mock(UserMapper.class),
-        mock(CommentLikeMapper.class), mock(GalleryLikeMapper.class));
+        mock(CommentLikeMapper.class), mock(GalleryLikeMapper.class), galleryBgmMediaMapper);
   }
 
   private Map<String, Object> row(Long targetId, Long total) {

@@ -283,6 +283,23 @@ class GalleryUploadServiceTest {
     verify(ossUtil, never()).upload(any(), any());
   }
 
+  /**
+   * 上传时把原始文件名存下来，详情里才有名字可显示。
+   *
+   * 对象键是 UUID（见 OssUtil.upload），从地址反推只能得到一串认不出的字符 ——
+   * 名字的唯一来源就是上传这一刻的原始文件名。
+   */
+  @Test
+  void bgmUploadRecordsTheOriginalFileNameAsItsTitle() throws Exception {
+    when(ossUtil.upload(any(), any())).thenReturn("https://example.test/music/song.mp3");
+
+    service().uploadBgm(mp3(), member());
+
+    ArgumentCaptor<GalleryBgmMedia> registered = ArgumentCaptor.forClass(GalleryBgmMedia.class);
+    verify(galleryBgmMediaMapper).insert(registered.capture());
+    assertEquals("song.mp3", registered.getValue().getTitle());
+  }
+
   @Test
   void bgmUploadRejectsAnonymousCallers() throws Exception {
     Result<GalleryBgmUploadVO> result = service().uploadBgm(mp3(), null);

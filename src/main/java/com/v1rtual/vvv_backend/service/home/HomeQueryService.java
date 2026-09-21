@@ -62,16 +62,23 @@ public class HomeQueryService {
       config = defaultConfig();
     }
 
+    String type = StringUtils.defaultString(config.getMainType(), "video");
+    String src = StringUtils.defaultString(config.getMainSrc(), "https://example.com/default.mp4");
+
     // 随机主资源不在这里挑：前端会再请求 /api/home/random 拿单个资源。
     // main.src 只是「随机接口失败时」的兜底值，不再下发全量媒体 URL。
     HomeMainVO main = HomeMainVO.builder()
-        .type(StringUtils.defaultString(config.getMainType(), "video"))
-        .src(StringUtils.defaultString(config.getMainSrc(), "https://example.com/default.mp4"))
+        .type(type)
+        .src(src)
         .title(StringUtils.defaultString(config.getMainTitle(), UNKNOWN))
         .desc(StringUtils.defaultString(config.getMainDesc(), UNKNOWN))
         .alt(StringUtils.defaultString(config.getMainAlt(), UNKNOWN))
         .random(config.getMainRandom() != null && config.getMainRandom() == 1)
         .build();
+
+    // 兜底值也是首屏真正要显示的那一条，上传者一并查出来。
+    // 缺了这一段，前端在第二次请求落地前只能自己编一个名字，或先空着再跳变
+    applyUploader(main, src, type);
 
     return Result.success(HomeConfigResponseVO.builder()
         .main(main)
@@ -154,6 +161,27 @@ public class HomeQueryService {
       log.error("Gallery JSON 解析失败", e);
       return new ArrayList<>();
     }
+  }
+
+  /**
+   * 把 src 的上传者信息补进主展示条目。
+   *
+   * 解析方式与 {@link #getFullItem} 完全一致：配置里的 type 可能是 all / gallery
+   * 这类策略名，能不能定位到素材要问过 {@link MediaTypeRegistry} 才知道，
+   * 这也正是前端拿配置里的 (src, type) 去请求 /api/home/full-item 时走的那条路。
+   *
+   * 定位不到时三项保持 null。配置里的 src 可能是兜底 URL 或已删除的素材，
+   * 这时服务端对它一无所知 —— 补默认值就等于替前端编造事实。
+   */
+  private void applyUploader(HomeMainVO main, String src, String type) {
+    MediaTypeStrategy strategy = mediaTypeRegistry.find(type);
+    MediaMetadata metadata = strategy == null ? null : strategy.findBySrc(src);
+    if (metadata == null) return;
+
+    User uploader = findUploader(metadata.uploaderId());
+    main.setUploaderAvatar(resolveAvatar(uploader));
+    main.setUploaderUsername(resolveUsername(uploader, metadata.uploaderUsername()));
+    main.setUploadTime(formatTimeOrUnknown(metadata.createdAt()));
   }
 
   /**

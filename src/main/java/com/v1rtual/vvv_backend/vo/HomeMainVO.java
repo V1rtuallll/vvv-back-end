@@ -17,4 +17,13 @@ public class HomeMainVO {
   private String desc;
   private String alt;
   private boolean random;
+  /**
+   * 上传者信息。只有在 {@code src} 按 {@code type} 能定位到素材时才下发，三项同进同出。
+   *
+   * 定位不到时（配置里写的是兜底 URL，或素材已从类型表删除）三项都是 null ——
+   * 服务端对这条 src 一无所知，不能拿默认值冒充，前端要显示未知而不是编造。
+   */
+  private String uploaderAvatar;
+  private String uploaderUsername;
+  private String uploadTime;
 }

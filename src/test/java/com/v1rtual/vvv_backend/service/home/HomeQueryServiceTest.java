@@ -9,6 +9,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.time.LocalDateTime;
+
 import org.junit.jupiter.api.Test;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -88,6 +90,63 @@ class HomeQueryServiceTest {
     assertEquals("video", result.getData().getMain().getType());
     assertEquals("未知", result.getData().getMain().getTitle());
     assertEquals(0, result.getData().getGalleryItems().size());
+    // 兜底 URL 不在任何类型表里，上传者三项只能是空，不能拿默认值顶替
+    assertNull(result.getData().getMain().getUploaderUsername());
+    assertNull(result.getData().getMain().getUploaderAvatar());
+    assertNull(result.getData().getMain().getUploadTime());
+  }
+
+  /**
+   * 配置里的 src 是首屏就要显示的那一条，上传者必须随配置一起下发：
+   * 不发的话前端在 /api/home/random 落地前只能自己编一个名字。
+   */
+  @Test
+  void configShipsTheUploaderOfTheConfiguredSrc() {
+    HomeQueryService service = service();
+    when(homeConfigMapper.getHomeConfig()).thenReturn(randomConfig("photo"));
+    when(photoMapper.selectBySrc("https://example.test/configured.png")).thenReturn(Photo.builder()
+        .src("https://example.test/configured.png").title("月光").uploaderId(7L)
+        .uploaderUsername("旧名字").createdAt(LocalDateTime.of(2026, 9, 12, 10, 0)).build());
+    when(userService.findById(7L)).thenReturn(user(7L, "新名字", "https://example.test/new-avatar.png"));
+
+    Result<HomeConfigResponseVO> result = service.getConfig();
+
+    assertEquals("新名字", result.getData().getMain().getUploaderUsername());
+    assertEquals("https://example.test/new-avatar.png", result.getData().getMain().getUploaderAvatar());
+    assertEquals("2026-09-12 10:00", result.getData().getMain().getUploadTime());
+    // 与 /api/home/full-item 同一套解析与格式化，两次响应不会给出不同的上传者
+    assertEquals(service.getFullItem("https://example.test/configured.png", "photo")
+        .getData().getUploaderUsername(), result.getData().getMain().getUploaderUsername());
+  }
+
+  /** all / gallery 是策略名而不是具体类型，配置里写的可能就是它们 */
+  @Test
+  void configResolvesUploaderThroughStrategyNamesLikeAllAndGallery() {
+    HomeConfig config = randomConfig("all");
+    when(homeConfigMapper.getHomeConfig()).thenReturn(config);
+    when(photoMapper.selectBySrc("https://example.test/configured.png")).thenReturn(Photo.builder()
+        .src("https://example.test/configured.png").title("月光").uploaderId(7L).build());
+    when(userService.findById(7L)).thenReturn(user(7L, "新名字", null));
+
+    Result<HomeConfigResponseVO> result = service().getConfig();
+
+    assertEquals("新名字", result.getData().getMain().getUploaderUsername());
+    assertEquals("/default-avatar.gif", result.getData().getMain().getUploaderAvatar());
+  }
+
+  @Test
+  void configLeavesUploaderEmptyWhenTheConfiguredSrcIsUnknown() {
+    when(homeConfigMapper.getHomeConfig()).thenReturn(randomConfig("photo"));
+    when(photoMapper.selectBySrc("https://example.test/configured.png")).thenReturn(null);
+
+    Result<HomeConfigResponseVO> result = service().getConfig();
+
+    assertEquals(200, result.getCode());
+    assertNull(result.getData().getMain().getUploaderUsername());
+    assertNull(result.getData().getMain().getUploaderAvatar());
+    assertNull(result.getData().getMain().getUploadTime());
+    // 定位不到素材时没有上传者可查，不该白查一次用户表
+    verify(userService, never()).findById(anyLong());
   }
 
   // ===== 随机主资源 =====

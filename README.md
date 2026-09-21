@@ -7,22 +7,26 @@ V1rtual 个人网站后端。`V1rtualSS` 是当前站点版本分支，`main` �
 
 ## 功能
 
-- 用户登录、JWT 鉴权、个人资料、头像、用户名和密码维护。
+- 用户注册与登录、JWT 鉴权、个人资料、头像、用户名和密码维护。
 - 首页配置、随机内容、Gallery 内容读取。
 - 图片、视频、GIF、音频等媒体的上传和管理。
-- Gallery 的列表、点赞、评论和评论点赞。
-- 管理员资源上传、OSS 同步、资源检索与首页编排。
+- Gallery 的列表、单条查询、背景音乐、点赞、评论和评论点赞。
+- 博客文章的发布、删除、正文配图，以及阅读计数、点赞和评论。
+- About 页面内容读取。
+- 管理员资源上传、OSS 同步、资源检索、首页编排与 About 配置。
 
 ## API 模块
 
 | Path | 内容 |
 | --- | --- |
-| `/api/auth` | 登录 |
-| `/api/user` | 用户资料、头像、密码、访客计数 |
-| `/api/home` | 首页配置、随机内容、完整内容条目 |
-| `/api/gallery` | 媒体、列表、点赞、评论 |
+| `/api/auth` | 注册、登录 |
+| `/api/user` | 用户资料、头像、密码、访客计数、用户战绩 |
+| `/api/home` | 首页配置、随机内容、完整内容条目、随机拼图 |
+| `/api/gallery` | 媒体、列表、单条查询、BGM 候选、点赞、评论 |
+| `/api/blog` | 文章列表、最新、详情、发布、删除、正文配图、点赞、评论 |
+| `/api/about` | About 页面公开内容 |
 | `/api/oss` | OSS 上传 |
-| `/api/admin` | 资源同步、资源管理、首页配置 |
+| `/api/admin` | 资源同步、资源管理、首页配置、About 配置 |
 
 ## 技术栈
 
@@ -42,26 +46,31 @@ src/main/
 ├── java/com/v1rtual/vvv_backend/
 │   ├── config/        # Security、CORS、OSS、Web 配置
 │   ├── controller/    # 公共 API 入口
-│   │   └── admin/     # 首页配置、媒体资源、OSS 同步入口
-│   ├── filter/        # JWT 与访问拦截
+│   │   └── admin/     # 首页配置、媒体资源、About 配置、OSS 同步入口
+│   ├── filter/        # JWT 认证
 │   ├── mapper/        # MyBatis 映射
 │   ├── security/      # 当前用户与站点所有者判断
 │   ├── service/       # 通用服务与资源同步
+│   │   ├── about/     # About 页面查询
 │   │   ├── admin/     # 管理端首页配置与媒体资源
-│   │   ├── gallery/   # Gallery 查询、上传与互动
+│   │   ├── blog/      # 文章查询、发布、删除、互动与正文配图
+│   │   ├── gallery/   # Gallery 查询、上传、BGM 与互动
 │   │   ├── home/      # 首页内容查询
+│   │   ├── media/     # 媒体类型注册、元数据归一与上传校验
 │   │   └── user/      # 用户资料维护
-│   ├── entity/        # 用户、媒体、互动、首页配置
+│   ├── entity/        # 用户、媒体、互动、博客、About、首页配置
 │   └── vo/            # 请求与响应对象
-└── resources/         # 配置示例、静态拦截页
-src/test/              # Spring 上下文、管理员权限与路由契约测试
+└── resources/         # 配置示例
+src/test/              # 单元测试，以及路由、CORS、错误契约测试
+db/                    # 数据库迁移与结构指纹，见 db/README.md
 ```
 
 ## 接口与服务边界
 
 - Controller 只处理 HTTP 参数、所有者校验和 Service 调用；管理端仍使用 `/api/admin/**` 原路径。
 - `CurrentUserProvider` 统一从 SecurityContext 解析当前用户；`OwnerAccess` 只允许用户名精确为 `V1rtual` 的用户管理站点。
-- Service 按 admin、gallery、home、user 能力拆分，Mapper 与数据模型未在本轮调整。
+- Service 按 about、admin、blog、gallery、home、media、user 能力拆分。
+- 数据库结构变更的唯一入口是 `db/migrations/`，没有 Flyway / Liquibase；发布后端时由服务器端发布脚本在切换 `current` 之前自动执行迁移。
 
 ## 本地运行
 
@@ -78,7 +87,9 @@ cp src/main/resources/application-example.yml src/main/resources/application.yml
 ./mvnw test
 ```
 
-该命令会校验 Spring 上下文、所有者用户名约束，以及六条管理接口路由仍保持原有 HTTP 方法和路径。
+该命令跑 `src/test` 下的 50 个测试类：Service 与 Mapper 的单元测试，以及路由映射、CORS、错误契约、安全白名单与 Spring 上下文的集成检查。不需要本地 MySQL。
+
+⚠️ 不要用 `./mvnw test | tail` 判断成败 —— 管道会让退出码变成 `tail` 的（恒 0）。要么不加管道，要么先 `set -o pipefail`。
 
 前端开发服务器运行在 `3001`，并将 `/api` 代理到此服务：
 
@@ -91,6 +102,8 @@ http://localhost:3001/api -> http://127.0.0.1:8848
 线上 Nginx 将 `/api/` 转发给 `127.0.0.1:8080`；后端 JAR 由 `spring_V1rtual.service` 运行。
 
 生产配置位于服务器 `/etc/v1rtual/application-prod.yml`，包含数据库、OSS 和 JWT 设置，不提交到仓库。
+
+发布时 `db/` 随产物一起上传，服务器端发布脚本**在切换 `current` 之前**执行迁移，迁移失败则中止发布、旧版本继续服务。这样「先结构、后代码」的顺序由代码保证，不靠人记得。
 
 每个分支代表一套完整网站版本。push 和 PR 只执行 CI 构建；部署由 GitHub Actions 手动选择分支执行。分支名按大版本对应：后端用大版本名（如 `V1rtualSS`），前端样式分支为 `大版本名_样式名`（如 `V1rtualSS_sky`）。改动 API、鉴权、资源字段、环境或 Nginx 路由时，前端样式分支对应后端大版本分支，两边分别通过 CI 后再联合验证。
 

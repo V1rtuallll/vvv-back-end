@@ -192,7 +192,10 @@ ssh <生产主机> 'sudo /usr/local/sbin/v1rtual-deploy-backend <旧revision>'
   更是一点问题都没有，极难发现。**改 `CorsConfig` 之后必须跑 `CorsConfigTest`**，
   它会对每个允许来源各发一次请求并断言不被 CORS 拒掉。
 - 移动端拦截已在 2026-09-13 移除：`MobileBlockFilter`、`config/WebConfig.java` 与
-  `../vvv/index.html` 里的内联脚本都不在了，手机端可以正常访问。改动前请确认这两处仍是空的。
+  `../vvv/index.html` 里的内联脚本都不在了，手机端可以正常访问。
+  2026-09-21 把当时漏掉的残留也清干净了（`static/mobile-blocked.html`、`SecurityConfig` 白名单里那条、
+  `ApiErrorController` javadoc 里对 `MobileBlockFilter` 的引用、以及对应测试里的化石文案），
+  **现在全仓零残留** —— 再看到这四个名字中的任何一个，说明是新的东西，不是这次遗留的。
 - **明文密钥曾进过 git 历史，其中 OSS key 与当前在用的是同一把。**
   `src/main/resources/application.yml` 现在已被 `.gitignore` 忽略、也未被跟踪，
   所以**当前状态是安全的**；但历史上 `89aa88b`（oss接入）提交过它，`6285c7d` 才删除，

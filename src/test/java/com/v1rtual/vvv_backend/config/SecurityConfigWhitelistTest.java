@@ -38,8 +38,8 @@ import org.springframework.web.util.pattern.PathPattern;
  *
  * 断言的是编译出来的过滤器链本身，不是某几个端点的响应：把链里的映射逐条读出来，
  * permitAll 的 pattern 集合必须与 SecurityConfig 里声明的一模一样。因此
- * 多一条、少一条、或把某条改成别的判定，都会红，包括没有任何端点对应的
- * {@code /mobile-blocked.html} —— 走真实请求的那套写法看不见它。
+ * 多一条、少一条、或把某条改成别的判定，都会红，包括不按路径放行的
+ * {@code dispatcherTypeMatchers(DispatcherType.ERROR)} —— 走真实请求的那套写法看不见它。
  *
  * 代价是读了 Spring Security 内部结构（映射表存在 RequestMatcherDelegatingAuthorizationManager
  * 的私有字段里，pattern 藏在 DeferredRequestMatcher 内部）。升级 Spring Security 后若这里报
@@ -61,8 +61,7 @@ class SecurityConfigWhitelistTest {
       "/api/blog/list",
       "/api/blog/latest",
       "/api/blog/detail/**",
-      "/api/blog/comments/**",
-      "/mobile-blocked.html"));
+      "/api/blog/comments/**"));
 
   @Autowired
   private SecurityFilterChain chain;

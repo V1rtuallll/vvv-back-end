@@ -17,7 +17,8 @@ import lombok.extern.slf4j.Slf4j;
  * 容器错误转发（/error）的响应，替代 Spring Boot 默认的
  * {timestamp,status,error,path}，让框架层与容器层触发的错误页也符合统一错误契约。
  *
- * 例如 MobileBlockFilter 的 {@code response.sendError(403, ...)} 会走这里。
+ * 走到这里的是没经过 {@code GlobalExceptionHandler} 的那些：容器级的 404（请求的路径没有映射）、
+ * 过滤器链里 {@code response.sendError(...)} 触发的响应，以及容器内部错误。
  */
 @Slf4j
 @RestController

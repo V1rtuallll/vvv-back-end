@@ -35,10 +35,10 @@ class ApiErrorControllerTest {
   @Test
   void messageSetByTheErroringFilterIsPassedThrough() {
     ResponseEntity<Result<Void>> response =
-        controller.handleError(requestWith(403, "手机端未适配，请使用电脑访问"));
+        controller.handleError(requestWith(403, "请求被拒绝"));
 
     assertEquals(403, response.getStatusCode().value());
-    assertEquals("手机端未适配，请使用电脑访问", response.getBody().getMsg());
+    assertEquals("请求被拒绝", response.getBody().getMsg());
   }
 
   @Test

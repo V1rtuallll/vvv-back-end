@@ -1,5 +1,6 @@
 package com.v1rtual.vvv_backend.service.gallery;
 
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -7,6 +8,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import org.apache.commons.lang3.StringUtils;
@@ -33,6 +35,16 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class GalleryQueryService {
 
+  /** BGM 名字推不出来时的占位。不显示机器生成的标识，用户认不出那是哪一首。 */
+  private static final String FALLBACK_BGM_TITLE = "背景音乐";
+
+  /** UUID 形状：8-4-4-4-12 段十六进制。OSS 上传按它生成对象键。 */
+  private static final Pattern UUID_SHAPE = Pattern.compile(
+      "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}");
+
+  /** 去掉横线的 UUID 与内容摘要一类：纯十六进制串，同样不含任何可读信息。 */
+  private static final Pattern HEX_SHAPE = Pattern.compile("[0-9a-fA-F]{16,}");
+
   private final GalleryMapper galleryMapper;
   private final CommentMapper commentMapper;
   private final UserMapper userMapper;
@@ -51,12 +63,7 @@ public class GalleryQueryService {
 
     long offset = PageParams.offset(page, limit);
     List<Gallery> galleryList = galleryMapper.selectPage(offset, limit, normalizedType);
-    Set<Long> userIds = galleryList.stream().map(Gallery::getUserId).filter(Objects::nonNull)
-        .collect(Collectors.toSet());
-    Map<Long, User> userMap = new HashMap<>();
-    if (!userIds.isEmpty()) {
-      userMapper.selectByIds(new ArrayList<>(userIds)).forEach(user -> userMap.put(user.getId(), user));
-    }
+    Map<Long, User> userMap = loadUploaders(galleryList);
     Map<Long, Long> commentCounts = countCommentsByGalleryId(galleryList);
     Map<String, String> bgmTitles = resolveBgmTitles(galleryList);
 
@@ -72,6 +79,49 @@ public class GalleryQueryService {
   }
 
   /**
+   * 按 id 或 src 查单条，供详情弹层接深链接（{@code /gallery?id=…} 与 {@code /gallery?src=…}）。
+   *
+   * 两个参数同时给出时以 id 为准：id 是主键，比地址更精确。
+   * 都不给返回 400 —— 那样查不了任何一条，是调用方漏传，不是「找不到」。
+   *
+   * 组装复用列表项那一套（同一条 {@link #toItem}），单条与列表行的字段不会各长各的。
+   */
+  public Result<GalleryItemVO> item(Long id, String src) {
+    Gallery gallery;
+    if (id != null) {
+      gallery = galleryMapper.selectById(id);
+    } else if (StringUtils.isNotBlank(src)) {
+      gallery = galleryMapper.selectBySrc(src);
+    } else {
+      return Result.error(400, "必须提供 id 或 src");
+    }
+    if (gallery == null) {
+      return Result.error(404, "未找到该资源");
+    }
+
+    List<Gallery> single = List.of(gallery);
+    Map<Long, User> userMap = loadUploaders(single);
+    long commentCount = countCommentsByGalleryId(single).getOrDefault(gallery.getId(), 0L);
+    String bgmTitle = resolveBgmTitles(single).get(gallery.getBgmSrc());
+    return Result.success(toItem(gallery, userMap.get(gallery.getUserId()), commentCount, bgmTitle), "加载成功");
+  }
+
+  /**
+   * 按 user_id 批量关联上传者。列表、候选与单条三个入口共用，
+   * 免得某一条路径的 uploaderUsername / uploaderAvatar 悄悄长成另一种取法。
+   * 没有 user_id 的行查不到用户，由 {@link #toItem} 落成默认值。
+   */
+  private Map<Long, User> loadUploaders(List<Gallery> galleryList) {
+    Set<Long> userIds = galleryList.stream().map(Gallery::getUserId).filter(Objects::nonNull)
+        .collect(Collectors.toSet());
+    Map<Long, User> userMap = new HashMap<>();
+    if (!userIds.isEmpty()) {
+      userMapper.selectByIds(new ArrayList<>(userIds)).forEach(user -> userMap.put(user.getId(), user));
+    }
+    return userMap;
+  }
+
+  /**
    * 「挑一首背景音乐」的候选列表。
    *
    * 映射复用 {@link #toItem}，与画廊列表同一个形状 —— 前端因此只有一套渲染逻辑，
@@ -81,12 +131,7 @@ public class GalleryQueryService {
    */
   public Result<List<GalleryItemVO>> bgmCandidates() {
     List<Gallery> candidates = galleryMapper.selectBgmCandidates();
-    Set<Long> userIds = candidates.stream().map(Gallery::getUserId).filter(Objects::nonNull)
-        .collect(Collectors.toSet());
-    Map<Long, User> userMap = new HashMap<>();
-    if (!userIds.isEmpty()) {
-      userMapper.selectByIds(new ArrayList<>(userIds)).forEach(user -> userMap.put(user.getId(), user));
-    }
+    Map<Long, User> userMap = loadUploaders(candidates);
 
     // 选曲界面不展示评论数，传 0：不为一次挑歌白跑一遍聚合查询。
     // BGM 名字同理传 null —— 选曲界面列的是候选自己，它配过什么曲子不在这一屏里。
@@ -150,12 +195,13 @@ public class GalleryQueryService {
   /**
    * 整页 BGM 的显示名，一次查完。
    *
-   * 名字有两个来源，按优先级取：
+   * 名字按优先级取：
    *   1. 曲子取自某条画廊项 → 用那条项的标题（用户当初写在画廊里的名字）；
-   *   2. 否则问登记表 → 上传时记下的原始文件名。
+   *   2. 否则问登记表 → 上传时记下的原始文件名；
+   *   3. 再查不到 → 从地址末段推一个可读名字，推不出来时用「背景音乐」占位。
    *
-   * 两条查询都只在页面上真的出现 BGM 时才发，地址先去过重：一页里 12 条配同一首曲子的图
-   * 不该变成 12 次往返。查不到的地址不入 Map，取值时自然得到 null，前端退化成只显示类型。
+   * 前两条查询都只在页面上真的出现 BGM 时才发，地址先去过重：一页里 12 条配同一首曲子的图
+   * 不该变成 12 次往返。没配 BGM 的行不入表，取值时自然得到 null，前端退化成只显示类型。
    */
   private Map<String, String> resolveBgmTitles(List<Gallery> galleryList) {
     List<String> bgmSrcs = galleryList.stream().map(Gallery::getBgmSrc)
@@ -168,7 +214,46 @@ public class GalleryQueryService {
     collectTitles(titles, galleryMapper.selectTitlesBySrcs(bgmSrcs), "src");
     // 登记表兜底，且不覆盖上一步的结果：能查到画廊项说明曲子本来就是画廊资源
     collectTitles(titles, galleryBgmMediaMapper.selectTitlesByUrls(bgmSrcs), "url");
+    // 最后一层：两个来源都认不出这个地址时从地址本身推名字。
+    // 登记表里 title 为 NULL 的行（记录原始文件名的代码是后补的）会落到这里 ——
+    // 不推的话前端只能把 OSS 的 UUID 对象键当名字显示。
+    bgmSrcs.forEach(src -> titles.computeIfAbsent(src, GalleryQueryService::nameFromUrl));
     return titles;
+  }
+
+  /**
+   * 从地址末段推显示名：文件名去掉扩展名后剩下的部分。
+   *
+   * 剩下的部分是机器生成的标识（UUID、纯十六进制串）或为空时改用「背景音乐」，
+   * 不把它原样显示给用户。判定刻意只认这两种形状，不猜其他。
+   */
+  private static String nameFromUrl(String url) {
+    String name = stripExtension(lastPathSegment(url));
+    if (name.isBlank() || isMachineGenerated(name)) return FALLBACK_BGM_TITLE;
+    return name;
+  }
+
+  /** 路径最后一段。地址不是合法 URI 时退回整串切分，不因为解析失败就没有名字。 */
+  private static String lastPathSegment(String url) {
+    String path;
+    try {
+      path = URI.create(url).getPath();
+    } catch (IllegalArgumentException e) {
+      path = url;
+    }
+    if (path == null) path = url;
+    int slash = path.lastIndexOf('/');
+    return slash >= 0 ? path.substring(slash + 1) : path;
+  }
+
+  /** 去掉最后一个点及其后缀。没有点、或点是首字符时原样返回。 */
+  private static String stripExtension(String name) {
+    int dot = name.lastIndexOf('.');
+    return dot > 0 ? name.substring(0, dot) : name;
+  }
+
+  private static boolean isMachineGenerated(String name) {
+    return UUID_SHAPE.matcher(name).matches() || HEX_SHAPE.matcher(name).matches();
   }
 
   /** 把一条批量查询的结果并进名字表。空标题不入表 —— 前端拿空串会显示成一个空的尾巴。 */

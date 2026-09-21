@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
@@ -168,6 +169,9 @@ class GalleryQueryServiceTest {
 
   private static final String SONG = "https://bucket.example.test/music/a.mp3";
   private static final String OTHER_SONG = "https://bucket.example.test/music/b.mp3";
+  /** OSS 上传的对象键形状：UUID 加扩展名。取自本地库里 title 为 NULL 的那一行。 */
+  private static final String UUID_SONG =
+      "https://vvv-v1rtual.oss-cn-beijing.aliyuncs.com/video/a18778e1-f6a9-4902-b967-a86ebcca8858.mov";
 
   private static Gallery photoWithBgm(long id, ResourceType type, String bgmSrc) {
     return Gallery.builder().id(id).type(type).userId(null).bgmSrc(bgmSrc).bgmType("audio").build();
@@ -212,23 +216,62 @@ class GalleryQueryServiceTest {
   }
 
   /**
-   * 两个来源都不认识这个地址时名字留空，前端退化成只显示类型。
+   * 两个来源都不认识这个地址时，从地址末段推名字：去掉扩展名的文件名。
    *
-   * 编一个假名字比留空更糟：用户点开一听，放的和写的不是同一首，而且没有任何地方会报错。
+   * 这是最后一层兜底，专治登记表里 title 为 NULL 的历史行（记录原始文件名的代码是后补的）。
    */
   @Test
-  void leavesTheNameNullWhenNeitherSourceKnowsTheAddress() {
+  void derivesTheNameFromTheAddressWhenNeitherSourceKnowsIt() {
+    String addressed = "https://bucket.example.test/music/night-drive.mp3";
     GalleryMapper galleryMapper = mock(GalleryMapper.class);
     when(galleryMapper.selectPage(0L, 12, null))
-        .thenReturn(List.of(photoWithBgm(1L, ResourceType.photo, SONG)));
-    when(galleryMapper.selectTitlesBySrcs(List.of(SONG))).thenReturn(List.of());
+        .thenReturn(List.of(photoWithBgm(1L, ResourceType.photo, addressed)));
+    when(galleryMapper.selectTitlesBySrcs(List.of(addressed))).thenReturn(List.of());
     GalleryBgmMediaMapper bgmMediaMapper = mock(GalleryBgmMediaMapper.class);
-    when(bgmMediaMapper.selectTitlesByUrls(List.of(SONG))).thenReturn(List.of());
+    when(bgmMediaMapper.selectTitlesByUrls(List.of(addressed))).thenReturn(List.of());
     GalleryQueryService service = service(galleryMapper, mock(CommentMapper.class), bgmMediaMapper);
 
     List<GalleryItemVO> items = service.list(1, 12, null).getData().getList();
 
-    assertNull(items.get(0).getBgmTitle());
+    assertEquals("night-drive", items.get(0).getBgmTitle());
+  }
+
+  /**
+   * 末段是机器生成的标识（OSS 的 UUID 对象键）时不显示它，改用「背景音乐」占位。
+   *
+   * 那份标识对用户没有任何信息量，显示出来和乱码一样。本地库里两条登记行的
+   * title 为 NULL、地址正是这个形状，前端此前只能把 UUID 显示成曲名。
+   */
+  @Test
+  void machineGeneratedFileNamesAreReplacedByThePlaceholder() {
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    when(galleryMapper.selectPage(0L, 12, null))
+        .thenReturn(List.of(photoWithBgm(1L, ResourceType.photo, UUID_SONG)));
+    when(galleryMapper.selectTitlesBySrcs(List.of(UUID_SONG))).thenReturn(List.of());
+    GalleryBgmMediaMapper bgmMediaMapper = mock(GalleryBgmMediaMapper.class);
+    when(bgmMediaMapper.selectTitlesByUrls(List.of(UUID_SONG))).thenReturn(List.of());
+    GalleryQueryService service = service(galleryMapper, mock(CommentMapper.class), bgmMediaMapper);
+
+    List<GalleryItemVO> items = service.list(1, 12, null).getData().getList();
+
+    assertEquals("背景音乐", items.get(0).getBgmTitle());
+  }
+
+  /** 登记表记下的名字优先于从地址推出来的那一个 */
+  @Test
+  void theRecordedNameWinsOverTheOneDerivedFromTheAddress() {
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    when(galleryMapper.selectPage(0L, 12, null))
+        .thenReturn(List.of(photoWithBgm(1L, ResourceType.photo, UUID_SONG)));
+    when(galleryMapper.selectTitlesBySrcs(List.of(UUID_SONG))).thenReturn(List.of());
+    GalleryBgmMediaMapper bgmMediaMapper = mock(GalleryBgmMediaMapper.class);
+    when(bgmMediaMapper.selectTitlesByUrls(List.of(UUID_SONG)))
+        .thenReturn(List.of(Map.of("url", UUID_SONG, "title", "夜航")));
+    GalleryQueryService service = service(galleryMapper, mock(CommentMapper.class), bgmMediaMapper);
+
+    List<GalleryItemVO> items = service.list(1, 12, null).getData().getList();
+
+    assertEquals("夜航", items.get(0).getBgmTitle());
   }
 
   /**
@@ -351,6 +394,145 @@ class GalleryQueryServiceTest {
 
     assertEquals(200, result.getCode());
     verifyNoInteractions(commentMapper);
+  }
+
+  // ===== 按 id 或 src 查单条：详情弹层的深链接 =====
+
+  private static final String ITEM_SRC = "https://bucket.example.test/imgs/9.png";
+
+  /**
+   * 深链接 /gallery?id=… 指向的项可能不在当前页（列表默认一页 4 条），
+   * 弹层此前只能在自己的列表里找，找不到就静默打不开。
+   */
+  @Test
+  void singleItemIsLookedUpById() {
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    when(galleryMapper.selectById(9L)).thenReturn(Gallery.builder()
+        .id(9L).type(ResourceType.photo).title("九号").src(ITEM_SRC).userId(null).build());
+    GalleryQueryService service = service(galleryMapper, mock(CommentMapper.class));
+
+    Result<GalleryItemVO> result = service.item(9L, null);
+
+    assertEquals(200, result.getCode());
+    assertEquals(9L, result.getData().getId());
+    assertEquals("九号", result.getData().getTitle());
+    verify(galleryMapper, never()).selectBySrc(anyString());
+  }
+
+  /** 首页主展示位的「详情」按钮带的是 src */
+  @Test
+  void singleItemIsLookedUpBySrc() {
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    when(galleryMapper.selectBySrc(ITEM_SRC)).thenReturn(Gallery.builder()
+        .id(9L).type(ResourceType.photo).title("九号").src(ITEM_SRC).userId(null).build());
+    GalleryQueryService service = service(galleryMapper, mock(CommentMapper.class));
+
+    Result<GalleryItemVO> result = service.item(null, ITEM_SRC);
+
+    assertEquals(200, result.getCode());
+    assertEquals(ITEM_SRC, result.getData().getSrc());
+    verify(galleryMapper, never()).selectById(anyLong());
+  }
+
+  /** 两个参数同时给出时以 id 为准：id 是主键，比地址更精确 */
+  @Test
+  void idWinsWhenBothParametersAreGiven() {
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    when(galleryMapper.selectById(9L)).thenReturn(Gallery.builder()
+        .id(9L).type(ResourceType.photo).title("九号").src(ITEM_SRC).userId(null).build());
+    GalleryQueryService service = service(galleryMapper, mock(CommentMapper.class));
+
+    Result<GalleryItemVO> result = service.item(9L, ITEM_SRC);
+
+    assertEquals(9L, result.getData().getId());
+    verify(galleryMapper, never()).selectBySrc(anyString());
+  }
+
+  /**
+   * 两个参数都不给时没有任何一条可查，是调用方漏传。
+   * 纯空白的 src 视同没传 —— 空串在库里查不到任何一条，不该拿它去查。
+   */
+  @Test
+  void singleItemWithoutAnyParameterIsRejectedAsABadRequest() {
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    GalleryQueryService service = service(galleryMapper, mock(CommentMapper.class));
+
+    assertEquals(400, service.item(null, null).getCode());
+    assertEquals(400, service.item(null, "   ").getCode());
+    verifyNoInteractions(galleryMapper);
+  }
+
+  @Test
+  void singleItemReportsNotFoundInsteadOfAnEmptyRow() {
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    when(galleryMapper.selectById(404L)).thenReturn(null);
+    when(galleryMapper.selectBySrc(ITEM_SRC)).thenReturn(null);
+    GalleryQueryService service = service(galleryMapper, mock(CommentMapper.class));
+
+    Result<GalleryItemVO> idResult = service.item(404L, null);
+    assertEquals(404, idResult.getCode());
+    assertEquals("未找到该资源", idResult.getMsg());
+    assertNull(idResult.getData());
+
+    Result<GalleryItemVO> srcResult = service.item(null, ITEM_SRC);
+    assertEquals(404, srcResult.getCode());
+    assertEquals("未找到该资源", srcResult.getMsg());
+  }
+
+  /**
+   * 单条与列表行必须是同一个形状：深链接打开的那一条带着上传者、评论数与 BGM 名字，
+   * 前端才能用同一套渲染逻辑。
+   */
+  @Test
+  void singleItemCarriesTheSameFieldsAsAListRow() {
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    when(galleryMapper.selectById(9L)).thenReturn(Gallery.builder()
+        .id(9L).type(ResourceType.photo).title("九号").src(ITEM_SRC).userId(7L)
+        .bgmSrc(SONG).bgmType("audio").build());
+    UserMapper userMapper = mock(UserMapper.class);
+    User uploader = new User();
+    uploader.setId(7L);
+    uploader.setUsername("u7");
+    uploader.setAvatar("https://bucket.example.test/avatar/u7.png");
+    when(userMapper.selectByIds(List.of(7L))).thenReturn(List.of(uploader));
+    CommentMapper commentMapper = mock(CommentMapper.class);
+    when(commentMapper.countGalleryCommentsByTargetIds(List.of(9L))).thenReturn(List.of(row(9L, 4L)));
+    GalleryBgmMediaMapper bgmMediaMapper = mock(GalleryBgmMediaMapper.class);
+    when(bgmMediaMapper.selectTitlesByUrls(List.of(SONG)))
+        .thenReturn(List.of(Map.of("url", SONG, "title", "Lexapro Delirium.mp3")));
+    GalleryQueryService service = new GalleryQueryService(galleryMapper, commentMapper, userMapper,
+        mock(CommentLikeMapper.class), mock(GalleryLikeMapper.class), bgmMediaMapper);
+
+    Result<GalleryItemVO> result = service.item(9L, null);
+
+    GalleryItemVO item = result.getData();
+    assertEquals("photo", item.getType());
+    assertEquals("u7", item.getUploaderUsername());
+    assertEquals("https://bucket.example.test/avatar/u7.png", item.getUploaderAvatar());
+    assertEquals(4L, item.getCommentCount());
+    assertEquals(SONG, item.getBgmSrc());
+    assertEquals("audio", item.getBgmType());
+    assertEquals("Lexapro Delirium.mp3", item.getBgmTitle());
+  }
+
+  /**
+   * 单条路径与列表共用同一套 BGM 名字解析，最后一层兜底同样生效 ——
+   * 首页主展示位的曲子多半没有任何可读名字，弹层里不能冒出 UUID。
+   */
+  @Test
+  void singleItemAlsoReplacesMachineGeneratedNamesWithThePlaceholder() {
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    when(galleryMapper.selectById(9L)).thenReturn(Gallery.builder()
+        .id(9L).type(ResourceType.photo).title("九号").src(ITEM_SRC).userId(null)
+        .bgmSrc(UUID_SONG).bgmType("video").build());
+    when(galleryMapper.selectTitlesBySrcs(List.of(UUID_SONG))).thenReturn(List.of());
+    GalleryBgmMediaMapper bgmMediaMapper = mock(GalleryBgmMediaMapper.class);
+    when(bgmMediaMapper.selectTitlesByUrls(List.of(UUID_SONG))).thenReturn(List.of());
+    GalleryQueryService service = service(galleryMapper, mock(CommentMapper.class), bgmMediaMapper);
+
+    Result<GalleryItemVO> result = service.item(9L, null);
+
+    assertEquals("背景音乐", result.getData().getBgmTitle());
   }
 
   private GalleryQueryService service(GalleryMapper galleryMapper, CommentMapper commentMapper) {

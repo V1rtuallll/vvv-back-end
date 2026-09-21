@@ -55,6 +55,7 @@ class SecurityConfigWhitelistTest {
       "/api/auth/**",
       "/api/user/info/{username}",
       "/api/gallery/list",
+      "/api/gallery/item",
       "/api/gallery/comments/**",
       "/api/about",
       "/api/blog/list",

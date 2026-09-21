@@ -99,6 +99,19 @@ public class GalleryController {
   }
 
   /**
+   * 按 id 或 src 查单条。详情弹层靠它接深链接：侧栏条目给 id，首页主展示位的「详情」给 src，
+   * 目标不在当前页时也能打开。
+   *
+   * 两个参数同时给出时以 id 为准；都不给返回 400。返回形状与 {@code /list} 的一行相同。
+   */
+  @GetMapping("/item")
+  public Result<GalleryItemVO> item(
+      @RequestParam(required = false) Long id,
+      @RequestParam(required = false) String src) {
+    return queryService.item(id, src);
+  }
+
+  /**
    * 「挑一首背景音乐」的候选列表：有声音的项，外加自己配过 BGM 的图文项。
    * 不分页，理由见 GalleryQueryService#bgmCandidates。
    */

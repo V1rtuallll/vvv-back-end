@@ -60,7 +60,6 @@ public class AdminHomeConfigService {
       config.setGalleryJson("[]");
     }
 
-    config.setPinnedBlogId(vo.getPinnedBlogId());
     homeConfigMapper.saveOrUpdate(config);
     return Result.success("保存成功");
   }

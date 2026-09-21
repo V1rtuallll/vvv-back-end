@@ -9,5 +9,4 @@ import lombok.Data;
 public class HomeConfigSaveVO {
   private Map<String, Object> main; // 接收嵌套 main
   private List<Map<String, Object>> galleryItems;
-  private Long pinnedBlogId;
 }

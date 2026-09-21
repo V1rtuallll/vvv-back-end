@@ -14,6 +14,5 @@ public class HomeConfig {
   private String mainAlt; // 描述
   private Integer mainRandom; // 1=随机 0=指定
   private String galleryJson; // JSON 数组
-  private Long pinnedBlogId;
   private LocalDateTime updatedAt;
 }

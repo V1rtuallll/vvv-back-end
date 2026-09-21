@@ -196,9 +196,12 @@ public class GalleryQueryService {
    * 整页 BGM 的显示名，一次查完。
    *
    * 名字按优先级取：
-   *   1. 曲子取自某条画廊项 → 用那条项的标题（用户当初写在画廊里的名字）；
-   *   2. 否则问登记表 → 上传时记下的原始文件名；
+   *   1. 曲子取自某条画廊项 → 用那条项的标题（用户当初写在画廊里的名字），原样显示；
+   *   2. 否则问登记表 → 上传时记下的原始文件名，按文件名净化（见 cleanFileName）；
    *   3. 再查不到 → 从地址末段推一个可读名字，推不出来时用「背景音乐」占位。
+   *
+   * 只有第 1 层拿到的是人写的文字，2、3 两层拿到的都是文件名，机器生成的标识要换占位：
+   * 上传时的文件名常常就是 OSS 造的 UUID（65AA902D-….mp4），原样显示对用户没有信息量。
    *
    * 前两条查询都只在页面上真的出现 BGM 时才发，地址先去过重：一页里 12 条配同一首曲子的图
    * 不该变成 12 次往返。没配 BGM 的行不入表，取值时自然得到 null，前端退化成只显示类型。
@@ -212,8 +215,11 @@ public class GalleryQueryService {
 
     Map<String, String> titles = new HashMap<>();
     collectTitles(titles, galleryMapper.selectTitlesBySrcs(bgmSrcs), "src");
-    // 登记表兜底，且不覆盖上一步的结果：能查到画廊项说明曲子本来就是画廊资源
-    collectTitles(titles, galleryBgmMediaMapper.selectTitlesByUrls(bgmSrcs), "url");
+    // 登记表兜底，且不覆盖上一步的结果：能查到画廊项说明曲子本来就是画廊资源。
+    // 这一层存的是上传时的原始文件名，净化之后再入表 —— 它是文件名，不是人写的标题
+    Map<String, String> registered = new HashMap<>();
+    collectTitles(registered, galleryBgmMediaMapper.selectTitlesByUrls(bgmSrcs), "url");
+    registered.forEach((src, name) -> titles.putIfAbsent(src, cleanFileName(name)));
     // 最后一层：两个来源都认不出这个地址时从地址本身推名字。
     // 登记表里 title 为 NULL 的行（记录原始文件名的代码是后补的）会落到这里 ——
     // 不推的话前端只能把 OSS 的 UUID 对象键当名字显示。
@@ -221,14 +227,21 @@ public class GalleryQueryService {
     return titles;
   }
 
+  /** 从地址末段推显示名。 */
+  private static String nameFromUrl(String url) {
+    return cleanFileName(lastPathSegment(url));
+  }
+
   /**
-   * 从地址末段推显示名：文件名去掉扩展名后剩下的部分。
+   * 文件名 → 可显示的曲名：去掉扩展名后剩下的部分。
    *
    * 剩下的部分是机器生成的标识（UUID、纯十六进制串）或为空时改用「背景音乐」，
    * 不把它原样显示给用户。判定刻意只认这两种形状，不猜其他。
+   *
+   * 两个来源的文件名都要过这里：登记表里记的上传名，以及地址末段。
    */
-  private static String nameFromUrl(String url) {
-    String name = stripExtension(lastPathSegment(url));
+  private static String cleanFileName(String fileName) {
+    String name = stripExtension(fileName);
     if (name.isBlank() || isMachineGenerated(name)) return FALLBACK_BGM_TITLE;
     return name;
   }

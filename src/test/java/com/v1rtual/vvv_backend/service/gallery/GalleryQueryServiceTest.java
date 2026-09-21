@@ -198,6 +198,8 @@ class GalleryQueryServiceTest {
   /**
    * 经「上传新文件」进来的 BGM 不在 gallery 表里，名字只存在登记表上 ——
    * 上传时把原始文件名记了下来。少了这一支，自己传的曲子永远显示不出名字。
+   *
+   * 记下的是文件名，所以要按文件名净化后再显示：扩展名不属于曲名。
    */
   @Test
   void fallsBackToTheNameRecordedWhenTheBackgroundMusicWasUploaded() {
@@ -212,7 +214,29 @@ class GalleryQueryServiceTest {
 
     List<GalleryItemVO> items = service.list(1, 12, null).getData().getList();
 
-    assertEquals("Lexapro Delirium.mp3", items.get(0).getBgmTitle());
+    assertEquals("Lexapro Delirium", items.get(0).getBgmTitle());
+  }
+
+  /**
+   * 登记表里记的是机器生成的上传名时同样要换占位。
+   *
+   * 上传时的文件名常常就是 OSS 造的 UUID（65AA902D-….mp4），记进登记表也不会变得可读。
+   * 这一层处理的是文件名，净化规则与末段那一层一致，否则线上照旧把 UUID 当曲名显示。
+   */
+  @Test
+  void machineGeneratedUploadNamesAreReplacedByThePlaceholderToo() {
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    when(galleryMapper.selectPage(0L, 12, null))
+        .thenReturn(List.of(photoWithBgm(1L, ResourceType.photo, SONG)));
+    when(galleryMapper.selectTitlesBySrcs(List.of(SONG))).thenReturn(List.of());
+    GalleryBgmMediaMapper bgmMediaMapper = mock(GalleryBgmMediaMapper.class);
+    when(bgmMediaMapper.selectTitlesByUrls(List.of(SONG)))
+        .thenReturn(List.of(Map.of("url", SONG, "title", "65AA902D-8957-426B-8403-46B8BB0FE776.mp4")));
+    GalleryQueryService service = service(galleryMapper, mock(CommentMapper.class), bgmMediaMapper);
+
+    List<GalleryItemVO> items = service.list(1, 12, null).getData().getList();
+
+    assertEquals("背景音乐", items.get(0).getBgmTitle());
   }
 
   /**
@@ -512,7 +536,7 @@ class GalleryQueryServiceTest {
     assertEquals(4L, item.getCommentCount());
     assertEquals(SONG, item.getBgmSrc());
     assertEquals("audio", item.getBgmType());
-    assertEquals("Lexapro Delirium.mp3", item.getBgmTitle());
+    assertEquals("Lexapro Delirium", item.getBgmTitle());
   }
 
   /**

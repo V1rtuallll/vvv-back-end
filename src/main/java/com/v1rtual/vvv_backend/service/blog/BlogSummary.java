@@ -10,8 +10,13 @@ import java.util.regex.Pattern;
  */
 public final class BlogSummary {
 
-  /** 摘要保留的最大字符数。 */
-  public static final int MAX_LENGTH = 100;
+  /**
+   * 摘要保留的最大字符数。
+   *
+   * 取 150：列表卡片正文列最宽时排到三行。再长会把卡片顶高，再短则卡片填不满。
+   * 侧栏「最新文章」另有自己的两行截断，不受这个值影响。
+   */
+  public static final int MAX_LENGTH = 150;
 
   // 围栏代码块必须最先去掉：它里面的内容可能包含看起来像图片、链接、标题的字符
   private static final Pattern FENCED_CODE = Pattern.compile("```[\\s\\S]*?```|~~~[\\s\\S]*?~~~");

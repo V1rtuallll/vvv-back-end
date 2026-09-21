@@ -15,7 +15,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
@@ -64,6 +66,14 @@ class BlogQueryServiceTest {
     vo.setStatus(status);
     vo.setCreatedAt(LocalDateTime.of(2026, 9, 16, 12, 0));
     return vo;
+  }
+
+  /** 批量评论数的返回行：列名与 countBlogCommentsByTargetIds 的 SELECT 别名一致。 */
+  private static Map<String, Object> commentCountRow(Long targetId, Long total) {
+    Map<String, Object> row = new HashMap<>();
+    row.put("targetId", targetId);
+    row.put("total", total);
+    return row;
   }
 
   // ---------- list ----------
@@ -237,6 +247,67 @@ class BlogQueryServiceTest {
     assertEquals("标题 这是正文内容，够长到可以当摘要用。", item.getSummary());
     // 右栏要拿它当缩略图，漏了这条字段列表封面就永远不显示
     assertEquals("https://bucket.example.test/blog/cover.png", item.getCoverImage());
+  }
+
+  /**
+   * 右栏每行左下角是阅读数与评论数。两个字段缺任一个，前端都会用 `|| 0` 兜底成 0 ——
+   * 页面不报错，数字恒为 0。views 取自 blog 行，commentCount 来自评论聚合，
+   * 与列表项是同一口径。
+   */
+  @Test
+  void latestCarriesViewsAndCommentCount() {
+    BlogWithAuthorVO latestRow = row(1L, "标题", "V1rtual", 1);
+    latestRow.setViews(42L);
+    when(blogMapper.selectLatest(5)).thenReturn(List.of(latestRow));
+    when(commentMapper.countBlogCommentsByTargetIds(List.of(1L)))
+        .thenReturn(List.of(commentCountRow(1L, 7L)));
+
+    Result<List<BlogLatestVO>> result = service().latest(5);
+
+    BlogLatestVO item = result.getData().get(0);
+    assertEquals(42L, item.getViews());
+    assertEquals(7, item.getCommentCount());
+  }
+
+  /** 整批评论数只允许一次聚合查询：右栏挂在全局布局上，每个页面都会请求一次。 */
+  @Test
+  void latestCountsCommentsForTheWholeBatchInASingleQuery() {
+    when(blogMapper.selectLatest(5))
+        .thenReturn(List.of(row(1L, "第一篇", "V1rtual", 1), row(2L, "第二篇", "V1rtual", 1)));
+    when(commentMapper.countBlogCommentsByTargetIds(List.of(1L, 2L)))
+        .thenReturn(List.of(commentCountRow(2L, 4L)));
+
+    Result<List<BlogLatestVO>> result = service().latest(5);
+
+    assertEquals(0, result.getData().get(0).getCommentCount());
+    assertEquals(4, result.getData().get(1).getCommentCount());
+    verify(commentMapper, never()).countBlogCommentByTargetId(anyLong());
+  }
+
+  /** 空结果拼不出合法的 IN ()，这条聚合必须整条跳过。 */
+  @Test
+  void latestOnAnEmptyResultQueriesNoComments() {
+    when(blogMapper.selectLatest(5)).thenReturn(List.of());
+
+    service().latest(5);
+
+    verify(commentMapper, never()).countBlogCommentsByTargetIds(anyList());
+  }
+
+  /** 列表与右栏共用同一条聚合，这里断言列表也是批量、不再逐条 COUNT。 */
+  @Test
+  void listCountsCommentsForTheWholePageInASingleQuery() {
+    when(blogMapper.selectPage(0, 10))
+        .thenReturn(List.of(row(1L, "第一篇", "V1rtual", 1), row(2L, "第二篇", "V1rtual", 1)));
+    when(blogMapper.countPublished()).thenReturn(2L);
+    when(commentMapper.countBlogCommentsByTargetIds(List.of(1L, 2L)))
+        .thenReturn(List.of(commentCountRow(1L, 3L)));
+
+    Result<PageResultVO<BlogSummaryVO>> result = service().list(1, 10);
+
+    assertEquals(3, result.getData().getList().get(0).getCommentCount());
+    assertEquals(0, result.getData().getList().get(1).getCommentCount());
+    verify(commentMapper, never()).countBlogCommentByTargetId(anyLong());
   }
 
   // ---------- comments ----------

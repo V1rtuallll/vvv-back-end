@@ -49,6 +49,14 @@ class CommentMapperBlogMethodsTest {
   }
 
   @Test
+  void blogBatchCountFiltersOnTheBlogTargetType() throws NoSuchMethodException {
+    String sql = sqlOf("countBlogCommentsByTargetIds", List.class);
+
+    assertTrue(sql.contains("'BLOG'"), "blog 版批量计数必须过滤 target_type = 'blog'");
+    assertFalse(sql.contains("'GALLERY'"), "blog 版批量计数不该出现 gallery");
+  }
+
+  @Test
   void blogMethodsHaveTheExpectedSignatures() throws NoSuchMethodException {
     assertEquals(int.class,
         CommentMapper.class.getMethod("insertBlogComment", Comment.class).getReturnType());
@@ -57,6 +65,9 @@ class CommentMapperBlogMethodsTest {
     assertEquals(int.class,
         CommentMapper.class.getMethod("countBlogCommentByTargetId", Long.class).getReturnType());
     assertNotNull(CommentMapper.class.getMethod("selectIdsByBlogId", Long.class));
+    // 批量计数与 gallery 版同形：入参是 ID 列表，返回 targetId / total 两列
+    assertEquals(List.class,
+        CommentMapper.class.getMethod("countBlogCommentsByTargetIds", List.class).getReturnType());
   }
 
   @Test

@@ -126,6 +126,22 @@ public interface CommentMapper {
   int countBlogCommentByTargetId(Long targetId);
 
   /**
+   * 一次查出多篇博客的评论数，避免列表页与右栏逐条 COUNT。
+   *
+   * 返回行的 key 为 targetId / total（Map 结果不参与下划线转驼峰）。
+   * targetIds 为空时调用方应跳过，IN () 不是合法 SQL。
+   */
+  @Select({"<script>",
+      "SELECT target_id AS targetId, COUNT(*) AS total FROM comment ",
+      "WHERE target_type = 'blog' AND target_id IN ",
+      "<foreach collection='targetIds' item='targetId' open='(' separator=',' close=')'>",
+      "#{targetId}",
+      "</foreach> ",
+      "GROUP BY target_id",
+      "</script>"})
+  List<Map<String, Object>> countBlogCommentsByTargetIds(@Param("targetIds") List<Long> targetIds);
+
+  /**
    * 某篇博客下全部评论的 ID（含各级子评论：回复沿用根评论的 target_id）。
    */
   @Select("SELECT id FROM comment WHERE target_type = 'blog' AND target_id = #{targetId}")

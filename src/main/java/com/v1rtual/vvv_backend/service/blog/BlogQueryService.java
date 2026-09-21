@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
@@ -49,9 +50,12 @@ public class BlogQueryService {
     if (!PageParams.isValid(page, limit)) return Result.error(400, "分页参数不合法");
 
     int offset = PageParams.clampToInt(PageParams.offset(page, limit));
+    List<BlogWithAuthorVO> rows = blogMapper.selectPage(offset, limit);
+    Map<Long, Integer> commentCounts = countCommentsByBlogId(rows);
+
     List<BlogSummaryVO> items = new ArrayList<>();
-    for (BlogWithAuthorVO row : blogMapper.selectPage(offset, limit)) {
-      items.add(toSummary(row));
+    for (BlogWithAuthorVO row : rows) {
+      items.add(toSummary(row, commentCountOf(commentCounts, row.getId())));
     }
     return Result.success(PageResultVO.<BlogSummaryVO>builder()
         .list(items)
@@ -62,13 +66,18 @@ public class BlogQueryService {
   public Result<List<BlogLatestVO>> latest(int limit) {
     int size = limit <= 0 ? LATEST_DEFAULT : Math.min(limit, LATEST_MAX);
 
+    List<BlogWithAuthorVO> rows = blogMapper.selectLatest(size);
+    Map<Long, Integer> commentCounts = countCommentsByBlogId(rows);
+
     List<BlogLatestVO> items = new ArrayList<>();
-    for (BlogWithAuthorVO row : blogMapper.selectLatest(size)) {
+    for (BlogWithAuthorVO row : rows) {
       items.add(BlogLatestVO.builder()
           .id(row.getId())
           .title(row.getTitle())
           .summary(BlogSummary.from(row.getContent()))
           .coverImage(row.getCoverImage())
+          .views(row.getViews())
+          .commentCount(commentCountOf(commentCounts, row.getId()))
           .createdAt(row.getCreatedAt())
           .build());
     }
@@ -150,7 +159,7 @@ public class BlogQueryService {
     return Result.success(comments, "评论加载成功");
   }
 
-  private BlogSummaryVO toSummary(BlogWithAuthorVO row) {
+  private BlogSummaryVO toSummary(BlogWithAuthorVO row, int commentCount) {
     return BlogSummaryVO.builder()
         .id(row.getId())
         .title(row.getTitle())
@@ -158,8 +167,39 @@ public class BlogQueryService {
         .coverImage(row.getCoverImage())
         .authorUsername(row.getAuthorUsername())
         .views(row.getViews())
-        .commentCount(commentMapper.countBlogCommentByTargetId(row.getId()))
+        .commentCount(commentCount)
         .createdAt(row.getCreatedAt())
         .build();
+  }
+
+  /**
+   * 一次查出整批文章的评论数。
+   *
+   * 列表与右栏共用这一条：右栏挂在全局布局上、每个页面都会请求一次，列表页最多 100 条，
+   * 逐条 COUNT 会变成每页 100 次额外往返。两个接口共用同一口径，也不会各自漂移。
+   *
+   * 入参为空时不查库：comment 的 IN () 不是合法 SQL。
+   */
+  private Map<Long, Integer> countCommentsByBlogId(List<BlogWithAuthorVO> rows) {
+    List<Long> blogIds = rows.stream().map(BlogWithAuthorVO::getId).filter(Objects::nonNull).distinct()
+        .collect(Collectors.toList());
+    if (blogIds.isEmpty()) return Map.of();
+
+    Map<Long, Integer> counts = new HashMap<>();
+    commentMapper.countBlogCommentsByTargetIds(blogIds).forEach(row -> {
+      Object targetId = row.get("targetId");
+      Object total = row.get("total");
+      if (targetId instanceof Number id && total instanceof Number count) {
+        counts.put(id.longValue(), count.intValue());
+      }
+    });
+    return counts;
+  }
+
+  /** 没有评论的文章不会出现在聚合结果里，缺省按 0 条渲染。 */
+  private static int commentCountOf(Map<Long, Integer> counts, Long blogId) {
+    if (blogId == null) return 0;
+    Integer count = counts.get(blogId);
+    return count == null ? 0 : count;
   }
 }

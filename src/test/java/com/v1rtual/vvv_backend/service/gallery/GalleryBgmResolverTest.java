@@ -75,17 +75,25 @@ class GalleryBgmResolverTest {
     }
   }
 
-  // ---------- 规则 3：有声音的项不叠音源 ----------
+  // ---------- 规则 3：音乐项不叠音源 ----------
 
-  /** D1 的闸。缺了它，D1 就只是前端约定 —— 接口能直接给视频配上第二首歌。 */
   @Test
-  void musicAndVideoItemsCannotCarryASecondTrack() {
+  void aVideoItemMayCarryItsOwnBackgroundMusic() {
+    // 视频原声与 BGM 同时出声是明确的产品要求：翻到哪一段视频，
+    // 它的原声照常放，配的那首曲子继续循环
     when(galleryBgmMediaMapper.selectByUrl(SONG)).thenReturn(new GalleryBgmMedia());
 
-    assertEquals("音乐与视频本身就在播放自己，不能再配背景音乐",
-        messageOf(SONG, "audio", ResourceType.music));
-    assertEquals("音乐与视频本身就在播放自己，不能再配背景音乐",
-        messageOf(CLIP, "video", ResourceType.video));
+    GalleryBgmResolver.Bgm bgm = resolver().resolve(SONG, "audio", ResourceType.video);
+
+    assertEquals(SONG, bgm.src());
+    assertEquals("audio", bgm.type());
+  }
+
+  @Test
+  void aMusicItemStillMayNotCarryBackgroundMusic() {
+    // 音乐项自己就是一首曲子，再配一首是两个音源同时响，且第二路没有任何控件解释
+    assertThrows(IllegalArgumentException.class,
+        () -> resolver().resolve(SONG, "audio", ResourceType.music));
   }
 
   /** 清空不触发规则 3：给一条 music 项发「清空 BGM」是个无害的空操作，不该被拒绝 */

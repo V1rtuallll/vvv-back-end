@@ -22,8 +22,10 @@ import lombok.RequiredArgsConstructor;
  * 五条规则，从便宜到贵依次判：
  *   1. src 与 type 要么都有、要么都没有；两个都没有表示「不配 BGM」。
  *   2. type 只认 audio / video（不是 ResourceType 的取值）。
- *   3. 目标项本身是 music / video 时不接受 BGM —— 它的详情里本来就在放它自己，
- *      再配一首就是两个音源同时响。
+ *   3. 目标项本身是 music 时不接受 BGM —— 音乐项自己就是音源，
+ *      再配一首会出现第二条没有控件解释的音轨。
+ *      视频项不在此列：视频原声与 BGM 同时出声是明确的产品要求，
+ *      详情里两个都在响，暂停按钮也一起管。
  *   4. 地址必须落在本站 OSS 的 music/ 或 video/ 目录下。
  *   5. 地址必须有归属：要么本功能的登记表里有行，要么是某条既有画廊项的 src。
  *
@@ -77,9 +79,11 @@ public class GalleryBgmResolver {
       throw new IllegalArgumentException("背景音乐类型只支持 audio 或 video");
     }
 
-    // 3) 有声音的项用自己的音轨，不再叠一首
-    if (targetType == ResourceType.music || targetType == ResourceType.video) {
-      throw new IllegalArgumentException("音乐与视频本身就在播放自己，不能再配背景音乐");
+    // 3) 音乐项本身就在放它自己，再配一首就是两个音源同时响，且第二路没有控件解释。
+    //    视频项不在此列：视频原声与 BGM 同时出声是明确的产品要求，
+    //    详情里两个都在响，暂停按钮也一起管
+    if (targetType == ResourceType.music) {
+      throw new IllegalArgumentException("音乐本身就在播放自己，不能再配背景音乐");
     }
 
     // 4) 必须是本站 OSS 的 music/ 或 video/ 目录。地址根本不成 URL 时 objectKeyOf 会抛，

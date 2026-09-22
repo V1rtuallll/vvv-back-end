@@ -55,14 +55,21 @@ public class GalleryManageService {
     if (gallery == null) return Result.error(404, "资源不存在");
     if (!canManage(gallery.getUserId(), currentUser)) return Result.error(403, OwnerAccess.DENIED_MESSAGE);
 
+    // 组内其余媒体的 OSS 对象同样要清，而它们的地址只能在删库**之前**读出来
+    List<String> doomedObjects = collectOssObjects(gallery);
+
     // 位置很关键：必须在删库与删 OSS **之前**。放到后面，这条项以及它的 OSS 对象
     // 都已经没了，再返回拒绝也没意义 —— 配了它的那些图从那一刻起就静默变哑了。
     // 判定交给 GalleryBgmUsageGuard：替换文件那条路径也要用同一道闸，逻辑只能有一份。
-    Result<Void> blocked = bgmUsageGuard.blockIfUsedAsBgm(gallery.getSrc());
-    if (blocked != null) return blocked;
-
-    // 组内其余媒体的 OSS 对象同样要清，而它们的地址只能在删库**之前**读出来
-    List<String> doomedObjects = collectOssObjects(gallery);
+    //
+    // 逐个查而不是只查封面：组内非封面的一条同样可能被人挑成 BGM —— 它曾经是封面，
+    // 后来在编辑里被重排或替换降成了非封面。只查封面的话它会直接放行，而下面照样
+    // 把整组媒体的对象都删掉，那些 BGM 从此静默变哑。doomedObjects 已经去过重，
+    // 封面就在其中，所以这一圈与「逐条媒体各查一遍」等价。
+    for (String src : doomedObjects) {
+      Result<Void> blocked = bgmUsageGuard.blockIfUsedAsBgm(src);
+      if (blocked != null) return blocked;
+    }
 
     // 幂等：并发重复删除时后一个请求拿到的行数会是 0
     if (deletionService.deleteGallery(gallery) == 0) return Result.error(404, "资源不存在");

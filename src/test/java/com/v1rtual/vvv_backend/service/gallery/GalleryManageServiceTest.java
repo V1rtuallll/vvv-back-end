@@ -219,6 +219,34 @@ class GalleryManageServiceTest {
   }
 
   /**
+   * 组内**非封面**的媒体被别人当 BGM 时，整条作品同样不能删。
+   *
+   * 它曾经是封面，后来在编辑里被重排或替换降成了非封面，然后被人挑成 BGM。
+   * 只查封面那一处的话它会直接放行，而删除会把整组媒体的对象一起清掉 ——
+   * 那些配了它的图从此**永久静默**：对象已经不在桶里，再想恢复也没有源文件了。
+   * 这条用例同时也钉住「问的是这个地址本身」：换成别人的地址同样会拿到「没人用」，
+   * 而实现会在静默地放行。
+   */
+  @Test
+  void refusesToDeleteWhenANonCoverMediaIsUsedAsBackgroundMusic() {
+    Gallery stored = gallery(7L, 100L);
+    when(galleryMapper.selectById(7L)).thenReturn(stored);
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    when(galleryMediaService.listOf(7L)).thenReturn(List.of(media(1L, SRC), media(2L, SECOND_SRC)));
+    // 封面（SRC）没人用，组内那条别的媒体被一张图配成了 BGM
+    when(galleryMapper.countByBgmSrc(SECOND_SRC)).thenReturn(1L);
+
+    Result<Void> result = service().deleteGallery(7L, user(100L, "作者"));
+
+    assertEquals(409, result.getCode());
+    assertTrue(result.getMsg().contains("1"),
+        "拒绝理由要说清被几张图占用，实际是：" + result.getMsg());
+    // 一条都还没删，桶里也没动
+    verify(deletionService, never()).deleteGallery(any());
+    verify(ossUtil, never()).deleteByPublicUrl(anyString());
+  }
+
+  /**
    * 顺序守卫：检查必须排在**任何**破坏性操作之前。
    *
    * 挪到 deletionService.deleteGallery 之后，数据库行已经没了，那时再返回 409

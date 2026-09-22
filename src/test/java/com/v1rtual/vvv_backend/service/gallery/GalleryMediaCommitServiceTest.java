@@ -166,6 +166,17 @@ class GalleryMediaCommitServiceTest {
         new byte[] {'I', 'D', '3', 0x03, 0x00, 0x00, 0x00});
   }
 
+  private static MockMultipartFile mp4() {
+    // 第 4 字节起的 ftyp：UploadValidator 的 mp4 魔数校验认它
+    return new MockMultipartFile("files", "clip.mp4", "video/mp4",
+        new byte[] {0, 0, 0, 0x20, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm'});
+  }
+
+  private static MockMultipartFile gif() {
+    return new MockMultipartFile("files", "anim.gif", "image/gif",
+        "GIF89a".getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
+  }
+
   private static User member() {
     return user(1L, "member");
   }
@@ -304,6 +315,51 @@ class GalleryMediaCommitServiceTest {
     assertEquals("同一个作品的媒体类型必须一致，不能混用", result.getMsg());
     verify(ossUtil, never()).upload(any(), any());
     verify(galleryMediaMapper, never()).deleteById(any());
+  }
+
+  /**
+   * 单媒体的作品不能靠「换文件」跨族 —— 那会把作品类型静默改掉。
+   *
+   * 提交的 items 在这里完全自洽（只有那一个新文件），所以「整组同族」那条判据放它过去：
+   * 放过去之后 gallery.type 会从 photo 变成 video、photo 表删一行、video 表插一行，
+   * 而用户以为自己只是换了一张图。摘除的 POST /{id}/replace 对同一件事是明确拒绝的，
+   * 不能用「现在是整组全量替换」当借口把闸撤掉。
+   */
+  @Test
+  void refusesToSwapTheOnlyMediaForAFileFromAnotherFamily() throws Exception {
+    stubAWorkingCommit();
+    when(galleryMediaMapper.selectByGalleryId(GALLERY_ID))
+        .thenReturn(List.of(media(11L, COVER_SRC, 0)));
+
+    Result<GalleryItemVO> result = service().commit(GALLERY_ID, payload(fresh(0)),
+        new MultipartFile[] {mp4()}, member());
+
+    assertEquals(400, result.getCode());
+    assertTrue(result.getMsg().contains("删除后重新上传"),
+        "文案要说清正确的做法，实际是：" + result.getMsg());
+    verify(ossUtil, never()).upload(any(), any());
+    // 库里一行都不能动：旧的那条被删、新文件又没进列表的话，作品会永久少一张
+    verify(galleryMediaMapper, never()).deleteById(any());
+    verify(galleryMapper, never()).updateMetadata(any());
+  }
+
+  /** 同族放行的那一支：photo 与 gif 是一族，把唯一那条换成动图仍然可以。 */
+  @Test
+  void allowsSwappingTheOnlyMediaForAFileOfTheSameFamily() throws Exception {
+    stubAWorkingCommit();
+    when(galleryMediaMapper.selectByGalleryId(GALLERY_ID))
+        .thenReturn(List.of(media(11L, COVER_SRC, 0)));
+    when(galleryMediaMapper.selectCover(GALLERY_ID)).thenReturn(GalleryMedia.builder()
+        .id(12L).galleryId(GALLERY_ID).src(UPLOADED_SRC).type(ResourceType.gif).sortOrder(0).build());
+    when(gifMapper.insert(any())).thenReturn(1);
+    when(galleryMapper.updateSrcAndType(GALLERY_ID, UPLOADED_SRC, ResourceType.gif)).thenReturn(1);
+
+    Result<GalleryItemVO> result = service().commit(GALLERY_ID, payload(fresh(0)),
+        new MultipartFile[] {gif()}, member());
+
+    assertEquals(200, result.getCode());
+    verify(galleryMediaMapper).deleteById(11L);
+    verify(galleryMapper).updateSrcAndType(GALLERY_ID, UPLOADED_SRC, ResourceType.gif);
   }
 
   /**

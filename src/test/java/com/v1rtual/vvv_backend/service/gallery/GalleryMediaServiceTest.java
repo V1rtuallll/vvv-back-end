@@ -10,6 +10,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -73,6 +74,56 @@ class GalleryMediaServiceTest {
     verify(galleryMediaMapper).insert(captor.capture());
     assertEquals(3, captor.getValue().getSortOrder());
     assertEquals("cm-1", captor.getValue().getClientMediaId());
+    // 已经有媒体行时不必再读一次 gallery 行：这条路径上没有任何要补的东西
+    verify(galleryMapper, never()).selectById(any());
+  }
+
+  /**
+   * 一条没有媒体行的作品上追加：先把 gallery 行上那个封面补成 0 号媒体，新文件排到 1。
+   *
+   * 这种形状线上真的存在 —— 发布时迁移跑在切换 current **之前**，所以 V008 的回填
+   * 跑完之后、新代码切上来之前，旧代码建的 gallery 行没有 media 行。
+   * 直接按 0 号插进去，这个新文件就成了「sort_order 最小的那条」：gallery.src（旧封面）、
+   * 类型表、media[0]（新文件）三份数据各说一套，一路静默到下一次整组提交才坐实 ——
+   * 而那一刻 syncCover 会把旧封面的 OSS 对象当作「被移除的媒体」删掉。
+   */
+  @Test
+  void appendBackfillsTheCoverWhenTheWorkHasNoMediaRowsYet() {
+    when(galleryMediaMapper.nextSortOrder(7L)).thenReturn(0);
+    when(galleryMapper.selectById(7L)).thenReturn(gallery());
+    when(galleryMediaMapper.insert(any())).thenReturn(1);
+
+    service().append(7L, "https://example.test/imgs/new.png", ResourceType.photo, "cm-2");
+
+    var inserted = org.mockito.ArgumentCaptor.forClass(GalleryMedia.class);
+    verify(galleryMediaMapper, times(2)).insert(inserted.capture());
+
+    GalleryMedia backfilled = inserted.getAllValues().get(0);
+    assertEquals(0, backfilled.getSortOrder());
+    assertEquals("https://example.test/imgs/old.png", backfilled.getSrc());
+    assertEquals(ResourceType.photo, backfilled.getType());
+    assertNull(backfilled.getClientMediaId(), "补录的那条不对应任何一次客户端追加");
+
+    GalleryMedia added = inserted.getAllValues().get(1);
+    assertEquals(1, added.getSortOrder());
+    assertEquals("https://example.test/imgs/new.png", added.getSrc());
+
+    // 封面没换人：补录的那条正是照 gallery 行抄的，I1 本来就成立，gallery 行不用改
+    verify(galleryMapper, never()).updateSrcAndType(any(), anyString(), any());
+  }
+
+  /** gallery 行上连封面都没有时没有可补的，新文件就占 0 号位 */
+  @Test
+  void appendStillTakesOrderZeroWhenThereIsNoCoverToBackfill() {
+    when(galleryMediaMapper.nextSortOrder(7L)).thenReturn(0);
+    when(galleryMapper.selectById(7L)).thenReturn(Gallery.builder().id(7L).src("  ").build());
+    when(galleryMediaMapper.insert(any())).thenReturn(1);
+
+    service().append(7L, "https://example.test/imgs/a.png", ResourceType.photo, "cm-3");
+
+    var inserted = org.mockito.ArgumentCaptor.forClass(GalleryMedia.class);
+    verify(galleryMediaMapper).insert(inserted.capture());
+    assertEquals(0, inserted.getValue().getSortOrder());
   }
 
   @Test

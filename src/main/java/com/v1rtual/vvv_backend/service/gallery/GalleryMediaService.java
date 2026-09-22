@@ -8,6 +8,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -70,12 +71,23 @@ public class GalleryMediaService {
    * 排到末尾而不是让调用方指定位置：编辑弹窗里「先删几个再加几个」会让客户端的
    * 槽位计算很容易撞上还活着的行，而末尾永远空着。真正的顺序由整组提交一次性定下来。
    *
-   * **不碰封面。** 末尾不可能把 sort_order 0 挤掉，所以 I1/I2 天然仍然成立。
+   * **不碰封面。** 末尾不可能把 sort_order 0 挤掉，所以 I1/I2 天然仍然成立 ——
+   * 唯一的例外是下面那条没有媒体行的作品，它连封面位都还空着，得先补上。
    *
    * @param clientMediaId 调用方的幂等键；超时重试时不重复插入
    */
   public GalleryMedia append(Long galleryId, String src, ResourceType type, String clientMediaId) {
     int sortOrder = galleryMediaMapper.nextSortOrder(galleryId);
+    // 落在 0 号位说明这条作品一行媒体都没有 —— 但 gallery 行上写着一个封面。
+    //
+    // 这种形状线上真的存在：发布时 deploy.yml 在切换 current **之前**跑迁移，所以
+    // V008 的回填跑完之后、新代码切上来之前，旧代码建的 gallery 行没有 media 行。
+    // 直接按 0 插进去会让这个新文件顶掉封面位，于是 gallery.src（旧封面）、类型表、
+    // media[0]（新文件）三份数据各说一套；读到下一次整组提交的 syncCover 才坐实，
+    // 而那时旧封面的 OSS 对象已经被当作「被移除的媒体」删掉了。
+    // 先把 gallery 行上那个封面补成 0 号媒体，新文件顺位到 1。补录的那条正是照
+    // gallery 行抄的，所以 I1 本来就成立，gallery 行与类型表一个字都不用改。
+    if (sortOrder == 0 && backfillCover(galleryId)) sortOrder = 1;
     GalleryMedia media = GalleryMedia.builder()
         .galleryId(galleryId)
         .src(src)
@@ -87,6 +99,26 @@ public class GalleryMediaService {
       throw new IllegalStateException("媒体追加失败");
     }
     return media;
+  }
+
+  /**
+   * 一条没有媒体行、却已经在 gallery 行上写着封面的作品：把那个封面补成 0 号媒体行。
+   *
+   * 只是把 gallery 行已有的事实写进这张表，所以不动 gallery 行、也不动类型表。
+   *
+   * 返回是否补录成功。gallery 行取不到、src 为空、或者补录没写成一行时返回 false，
+   * 追加方据此**不**让位：那时没有可补的封面，那个位置本来就该是空的。
+   */
+  private boolean backfillCover(Long galleryId) {
+    Gallery gallery = galleryMapper.selectById(galleryId);
+    if (gallery == null || StringUtils.isBlank(gallery.getSrc())) return false;
+    return galleryMediaMapper.insert(GalleryMedia.builder()
+        .galleryId(galleryId)
+        .src(gallery.getSrc())
+        .type(gallery.getType())
+        .sortOrder(0)
+        .clientMediaId(null)
+        .build()) == 1;
   }
 
   /**

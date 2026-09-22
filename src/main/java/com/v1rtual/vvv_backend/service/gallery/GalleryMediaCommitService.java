@@ -141,6 +141,20 @@ public class GalleryMediaCommitService {
     // 整组都没有类型（回填之前的历史行）时推不出族，也就判不了 BGM 能不能配
     if (family == null) return Result.error(400, "作品的媒体类型缺失，无法保存");
 
+    // 3b) 提交的 items 内部自洽还不够 —— 这条作品**自己**的族也要留住。
+    //    单媒体的作品把唯一那条换成别的类型时，items 里只有这一个文件，族判不出问题：
+    //    只判 items 的话「photo 作品的那张图换成一段 mp4」会一路通过，接着 gallery.type
+    //    从 photo 变成 video、photo 表删一行、video 表插一行，整条作品的类型被静默改掉。
+    //    摘除的 POST /{id}/replace 对同一件事是明确拒绝的，不能因为现在是全量替换就把闸撤掉。
+    //    photo 与 gif 同族，仍然放行；判据与追加那条路径共用同一份。
+    for (Integer index : newIndexes) {
+      ResourceType incomingType = resolvedTypes.get(index);
+      if (!GalleryMediaService.sameFamily(gallery.getType(), incomingType)) {
+        return Result.error(400, "这个作品的媒体类型是 " + gallery.getType()
+            + "，不能换成 " + incomingType + "。换类型请删除后重新上传");
+      }
+    }
+
     // 4) BGM 一律交给 resolver 判，这里不看「传没传」：只发一边会被它的规则 1 拒掉，
     //    两边都不发就是清空 —— 与编辑接口原来的口径一致。
     //    位置在传文件之前：反过来的话 BGM 不合法时文件已经上去了，还得再删一次，

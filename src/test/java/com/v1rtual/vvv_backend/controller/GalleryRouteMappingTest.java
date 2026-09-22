@@ -8,6 +8,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -91,5 +92,9 @@ class GalleryRouteMappingTest {
     assertNotNull(mapping, "整组提交应当是 PUT 端点");
     assertEquals(1, mapping.value().length);
     assertEquals("/{id}", mapping.value()[0]);
+    // 元数据与文件在同一个 multipart 请求里：少了 consumes，写错 Content-Type 的调用方
+    // 只会拿到 415，而端点在路由上看着完全正常
+    assertEquals(1, mapping.consumes().length);
+    assertEquals(MediaType.MULTIPART_FORM_DATA_VALUE, mapping.consumes()[0]);
   }
 }

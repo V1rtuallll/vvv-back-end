@@ -418,6 +418,33 @@ class GalleryManageServiceTest {
     verify(ossUtil, never()).deleteByPublicUrl(anyString());
   }
 
+  /**
+   * 取消上传同样要过 BGM 引用这道闸。
+   *
+   * 「刚上传」不等于「没人见过」：首个文件一落库，这条作品就已经是一个长度为 1 的
+   * 媒体列表，地址从此可见。在作者点取消之前，别人完全可能已经把它配成了背景音乐，
+   * 而取消会把整组 OSS 对象删掉 —— 那些 BGM 从此永久静默，且没有源文件可以恢复。
+   *
+   * 这里让组内**非封面**的那条被引用：只查封面的话它会被放行，而删除照样清掉整组对象。
+   */
+  @Test
+  void cancelUploadRefusesWhenAMediaInTheGroupIsUsedAsBackgroundMusic() {
+    Gallery stored = gallery(7L, 100L);
+    when(galleryMapper.selectByClientUploadId(CLIENT_ID)).thenReturn(stored);
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    when(galleryMediaService.listOf(7L)).thenReturn(List.of(media(1L, SRC), media(2L, SECOND_SRC)));
+    when(galleryMapper.countByBgmSrc(SECOND_SRC)).thenReturn(1L);
+
+    Result<Void> result = service().cancelUpload(CLIENT_ID, user(100L, "作者"));
+
+    assertEquals(409, result.getCode());
+    assertTrue(result.getMsg().contains("1"),
+        "拒绝理由要说清被几张图占用，实际是：" + result.getMsg());
+    // 被拦在破坏性操作之前：库没删，桶也没动
+    verify(deletionService, never()).deleteGallery(any());
+    verify(ossUtil, never()).deleteByPublicUrl(anyString());
+  }
+
   @Test
   void cancelUploadReportsWhenTheOssObjectCannotBeRemoved() {
     Gallery stored = gallery(7L, 100L);

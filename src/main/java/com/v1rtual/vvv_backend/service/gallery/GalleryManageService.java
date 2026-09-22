@@ -113,13 +113,18 @@ public class GalleryManageService {
     if (!canManage(gallery.getUserId(), currentUser)) {
       return Result.error(403, OwnerAccess.DENIED_MESSAGE);
     }
-    // 这里刻意**不**做 BGM 引用检查，与 deleteGallery 不同：
-    // cancelUpload 只处理刚刚这一次上传，那个资源从来没人见过
-    //（它要等上传跑完、列表刷新之后才可能被别人挑中），不可能已经被人配成 BGM。
-    // 真到了「它已经被人配上」的状态，走的是删除路径，那里有闸。
     // 被取消的这次上传通常只有一条媒体，但多选上传的第一个文件走的就是这条路，
     // 所以照样按整组来收
     List<String> doomedObjects = collectOssObjects(gallery);
+
+    // 与 deleteGallery 同一道闸，位置同样必须在删库与删 OSS **之前**。
+    // 「刚上传」不等于「没人见过」：首个文件一落库，这条作品就已经是一个长度为 1 的
+    // 媒体列表，地址立刻就可见了，别人可以在作者点取消之前的窗口期里把它配成 BGM。
+    // 少了这一圈，取消会把整组对象删掉，那些 BGM 从此永久静默，且没有源文件可以恢复。
+    for (String src : doomedObjects) {
+      Result<Void> blocked = bgmUsageGuard.blockIfUsedAsBgm(src);
+      if (blocked != null) return blocked;
+    }
 
     // 并发下另一个请求已经删掉了，同样视为成功
     if (deletionService.deleteGallery(gallery) == 0) return Result.success("这次上传没有产生资源");

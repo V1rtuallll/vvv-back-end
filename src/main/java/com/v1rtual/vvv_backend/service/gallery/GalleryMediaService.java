@@ -31,7 +31,8 @@ import lombok.RequiredArgsConstructor;
  * 点不开详情、或者封面换了但列表还是旧的。集中在一处之后，漏掉同步这件事
  * 从「每个调用方都要记得」变成「只有一个地方可能出错」。
  *
- * 读取端不需要这个类：查询直接走 {@link GalleryMediaMapper}。
+ * 读取端**一般**直接走 {@link GalleryMediaMapper}，不必绕到这里。例外只有一处：
+ * 按幂等键取行（{@link #findByClientMediaId}），理由写在那条方法上。
  */
 @Service
 @RequiredArgsConstructor

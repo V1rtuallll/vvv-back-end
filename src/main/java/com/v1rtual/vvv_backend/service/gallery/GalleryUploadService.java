@@ -222,7 +222,11 @@ public class GalleryUploadService {
       if (url != null) cleanupOssObject(url);
       markRollback();
       GalleryMedia winner = galleryMediaService.findByClientMediaId(mediaId);
-      if (winner == null) return Result.error(500, "媒体入库失败");
+      // 与预检同一条判据：幂等键撞上的那条必须属于本作品。
+      // 少了这一句，拿别的作品的键来撞会得到一个 200，而 body 指向的是别的作品里的媒体
+      if (winner == null || !id.equals(winner.getGalleryId())) {
+        return Result.error(500, "媒体入库失败");
+      }
       return Result.success(toMediaItem(winner), "该文件已上传，返回已有媒体");
     } catch (RuntimeException e) {
       if (url != null) cleanupOssObject(url);

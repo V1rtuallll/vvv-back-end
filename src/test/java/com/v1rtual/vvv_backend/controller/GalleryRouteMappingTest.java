@@ -15,7 +15,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.multipart.MultipartFile;
 
 /**
- * 单条查询的路由契约。路径写错不会在编译期暴露，只会在前端 404 时才发现；
+ * 画廊端点的路由契约，读取与写入各钉一条：单条查询、追加媒体。
+ * 路径写错不会在编译期暴露，只会在前端 404 时才发现；
  * 而 SecurityConfig 的白名单是按 pattern 字符串匹配的，白名单里放了
  * {@code /api/gallery/item} 也说明不了真有一个端点挂在那里。
  */

@@ -700,4 +700,61 @@ class GalleryUploadServiceTest {
     assertEquals(500, service().appendMedia(7L, png(), "cm-1", member()).getCode());
     verify(ossUtil).deleteByPublicUrl("https://example.test/imgs/b.png");
   }
+
+  /**
+   * 归属校验只管「是不是本作品」，不能反过来把正常的并发重试也拒掉。
+   *
+   * 这一条与下面那条是一对：少了它，把兜底改成一律 500 也能让那条用例变绿，
+   * 而幂等键存在的意义（超时重试拿回同一条媒体）当场就没了。
+   */
+  @Test
+  void aConcurrentAppendThatLosesTheUniqueIndexRaceReturnsTheWinner() throws Exception {
+    when(galleryMapper.selectById(7L)).thenReturn(existingPhoto());
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    // 第一次幂等检查时还没有，插入撞唯一索引后再查就能查到
+    GalleryMedia winner = GalleryMedia.builder()
+        .id(11L).galleryId(7L).src("https://example.test/imgs/b.png").type(ResourceType.photo)
+        .sortOrder(1).clientMediaId("cm-1").build();
+    when(galleryMediaService.findByClientMediaId("cm-1")).thenReturn(null, winner);
+    when(ossUtil.upload(any(), any())).thenReturn("https://example.test/imgs/b.png");
+    when(galleryMediaService.append(any(), any(), any(), any()))
+        .thenThrow(new DuplicateKeyException("uk_client_media_id"));
+
+    Result<GalleryMediaItemVO> result = service().appendMedia(7L, png(), "cm-1", member());
+
+    assertEquals(200, result.getCode());
+    assertEquals(11L, result.getData().getId());
+    assertEquals("https://example.test/imgs/b.png", result.getData().getSrc());
+    // 这次上传是重复的，对象必须清掉
+    verify(ossUtil).deleteByPublicUrl("https://example.test/imgs/b.png");
+  }
+
+  /**
+   * 兜底取到的那条同样要校验归属，判据与预检那句一致。
+   *
+   * 少这一句时的表现：拿别的作品占着的幂等键来撞，唯一索引确实挡住了插入、文件也清掉了，
+   * 但响应是 200，body 指向的是**别的作品**里的那条媒体 —— 调用方以为追加成功，
+   * 而目标作品里根本没有它；每次尝试还白烧一次 OSS 上传与删除。
+   */
+  @Test
+  void appendingRefusesTheFallbackWinnerWhenItBelongsToAnotherWork() throws Exception {
+    when(galleryMapper.selectById(7L)).thenReturn(existingPhoto());
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    // 幂等键已被 gallery 9 占用：预检看到的是别的作品而放行，兜底取到的还是同一条
+    GalleryMedia foreign = GalleryMedia.builder()
+        .id(11L).galleryId(9L).src("https://example.test/imgs/other.png").type(ResourceType.photo)
+        .sortOrder(1).clientMediaId("cm-1").build();
+    when(galleryMediaService.findByClientMediaId("cm-1")).thenReturn(foreign);
+    when(ossUtil.upload(any(), any())).thenReturn("https://example.test/imgs/b.png");
+    when(galleryMediaService.append(any(), any(), any(), any()))
+        .thenThrow(new DuplicateKeyException("uk_client_media_id"));
+
+    Result<GalleryMediaItemVO> result = service().appendMedia(7L, png(), "cm-1", member());
+
+    assertEquals(500, result.getCode());
+    // 别的作品里的那条一个字段都不许跟着响应出去
+    assertNull(result.getData());
+    // 刚传上去的那份是垃圾，必须清掉
+    verify(ossUtil).deleteByPublicUrl("https://example.test/imgs/b.png");
+  }
 }

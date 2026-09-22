@@ -61,7 +61,8 @@ class SecurityConfigWhitelistTest {
       "/api/blog/list",
       "/api/blog/latest",
       "/api/blog/detail/**",
-      "/api/blog/comments/**"));
+      "/api/blog/comments/**",
+      "/api/player/**"));
 
   @Autowired
   private SecurityFilterChain chain;

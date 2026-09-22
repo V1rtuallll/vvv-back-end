@@ -25,6 +25,7 @@ class AdminRouteMappingTest {
     assertMapped("/api/admin/about", RequestMethod.POST);
     assertMapped("/api/admin/resources", RequestMethod.GET);
     assertMapped("/api/admin/resource/update", RequestMethod.POST);
+    assertMapped("/api/admin/player/config", RequestMethod.POST);
   }
 
   private void assertMapped(String path, RequestMethod method) {

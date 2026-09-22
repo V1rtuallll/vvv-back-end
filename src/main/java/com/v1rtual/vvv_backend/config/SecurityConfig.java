@@ -44,7 +44,9 @@ public class SecurityConfig {
                 "/api/blog/list",
                 "/api/blog/latest",
                 "/api/blog/detail/**",
-                "/api/blog/comments/**")
+                "/api/blog/comments/**",
+                // 侧栏播放器的曲目表。播放器在每一页上，包括未登录能看的首页
+                "/api/player/**")
             .permitAll() // 放行
             // .requestMatchers("/api/user/count").permitAll() // 统计用户数放行
             // .requestMatchers("/api/user/info/{username}").permitAll() // 用户信息放行

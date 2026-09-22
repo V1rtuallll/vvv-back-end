@@ -1,6 +1,7 @@
 package com.v1rtual.vvv_backend.service.gallery;
 
 import java.util.Set;
+import java.util.regex.Pattern;
 
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Component;
@@ -19,13 +20,15 @@ import lombok.RequiredArgsConstructor;
  * 分成两份实现的话，两边迟早会漂移，而漂移的后果是**半挡状态**：
  * 一条路径挡住了、另一条没有，看着像有校验，其实可以从没挡住的那条绕进来。
  *
- * 五条规则，从便宜到贵依次判：
+ * 六条规则，从便宜到贵依次判：
  *   1. src 与 type 要么都有、要么都没有；两个都没有表示「不配 BGM」。
  *   2. type 只认 audio / video（不是 ResourceType 的取值）。
  *   3. 目标项本身是 music 时不接受 BGM —— 音乐项自己就是音源，
  *      再配一首会出现第二条没有控件解释的音轨。
  *      视频项不在此列：视频原声与 BGM 同时出声是明确的产品要求，
  *      详情里两个都在响，暂停按钮也一起管。
+ *   3.5. 站内曲库（/music/ 下的公开静态音频）直接放行，不需要归属 ——
+ *        它随前端产物一起发布，本来就没有归属可言。
  *   4. 地址必须落在本站 OSS 的 music/ 或 video/ 目录下。
  *   5. 地址必须有归属：要么本功能的登记表里有行，要么是某条既有画廊项的 src。
  *
@@ -43,6 +46,18 @@ public class GalleryBgmResolver {
   /** 允许作为 BGM 的 OSS 目录。imgs/ 与 gif/ 不在其中，所以图片到不了后面的归属检查。 */
   private static final Set<String> ALLOWED_PREFIXES = Set.of(
       OssUtil.FileType.MUSIC.getPath(), OssUtil.FileType.VIDEO.getPath());
+
+  /**
+   * 站内曲库：public/music 下的音频，由前端静态站在 /music/ 下提供，**不在 OSS 里**。
+   *
+   * 形状必须严格。原因：下面第 4 条前缀检查对 `/music/...` 形状的协议相对地址也会放行 ——
+   * `URI.create("//evil.com/music/x.mp3").getPath()` 正好是 `/music/x.mp3`。今天挡住它的是
+   * 第 5 条归属判定，而站内曲库这一支是一条**不需要归属**的旁路，所以必须靠形状兜住：
+   * 字符类排掉斜杠（`..` 因此无从穿越）、反斜杠、`?`、`#`。而 `//` 开头的地址根本进不了
+   * 这一支（`startsWith("/music/")` 对它是假），仍走原有的 OSS 校验链。
+   */
+  private static final Pattern SITE_MUSIC = Pattern.compile(
+      "^/music/[^/\\\\?#]+\\.(mp3|flac|m4a|ogg|wav)$", Pattern.CASE_INSENSITIVE);
 
   private final GalleryBgmMediaMapper galleryBgmMediaMapper;
   private final GalleryMapper galleryMapper;
@@ -84,6 +99,19 @@ public class GalleryBgmResolver {
     //    详情里两个都在响，暂停按钮也一起管
     if (targetType == ResourceType.music) {
       throw new IllegalArgumentException("音乐本身就在播放自己，不能再配背景音乐");
+    }
+
+    // 3.5) 站内曲库。不在 OSS 里，所以不走下面两条 OSS 规则：
+    //      前缀检查会碰巧通过，但归属判定必然失败 —— 这些文件是随前端产物一起
+    //      发布的公开静态资源，本来就没有「归属」可言，谁都能直接取到
+    if (src.startsWith("/music/")) {
+      if (!SITE_MUSIC.matcher(src).matches()) {
+        throw new IllegalArgumentException("本站曲库地址无效");
+      }
+      if (!TYPE_AUDIO.equals(type)) {
+        throw new IllegalArgumentException("本站曲库只能作为音频背景音乐");
+      }
+      return new Bgm(src, TYPE_AUDIO);
     }
 
     // 4) 必须是本站 OSS 的 music/ 或 video/ 目录。地址根本不成 URL 时 objectKeyOf 会抛，

@@ -126,14 +126,17 @@ class GalleryBgmResolverTest {
   /**
    * 前缀对了还不够。
    *
-   * 一条相对路径 `music/x.mp3` 的前缀检查是**通过**的 —— 它能拼出本站形状的地址，
-   * 但库里既没有登记行、也没有哪条画廊项的 src 是它。只查形状的话，
+   * 一条 OSS 地址的前缀检查是**通过**的，但库里既没有登记行、
+   * 也没有哪条画廊项的 src 是它。只查形状的话，
    * 任何人照着别人的地址写一遍就能用上别人的对象。
+   *
+   * 这里喂 OSS 地址而不是裸相对路径 `/music/...`：后者已经是站内曲库那条旁路
+   * （规则 3.5）的合法形状，由 theSiteMusicLibraryIsAcceptedWithoutOwnership 覆盖。
    */
   @Test
   void aWellShapedAddressStillNeedsOwnership() {
     assertEquals("背景音乐必须是本功能上传的地址，或画廊里已有资源的地址",
-        messageOf("/music/somebody-elses.mp3", "audio", ResourceType.photo));
+        messageOf("https://bucket.example.test/music/somebody-elses.mp3", "audio", ResourceType.photo));
   }
 
   @Test
@@ -164,5 +167,54 @@ class GalleryBgmResolverTest {
     when(galleryBgmMediaMapper.selectByUrl(SONG)).thenReturn(new GalleryBgmMedia());
 
     assertEquals(SONG, resolver().resolve("  " + SONG + "  ", " audio ", ResourceType.photo).src());
+  }
+
+  // ---------- 站内曲库（public/music）----------
+
+  @Test
+  void theSiteMusicLibraryIsAcceptedWithoutOwnership() {
+    assertEquals(new GalleryBgmResolver.Bgm("/music/a.mp3", "audio"),
+        resolver().resolve("/music/a.mp3", "audio", ResourceType.photo));
+    assertEquals(new GalleryBgmResolver.Bgm("/music/a.flac", "audio"),
+        resolver().resolve("/music/a.flac", "audio", ResourceType.gif));
+  }
+
+  @Test
+  void theSiteMusicLibraryNeverReachesTheOssOwnershipCheck() {
+    resolver().resolve("/music/a.mp3", "audio", ResourceType.photo);
+
+    verify(galleryBgmMediaMapper, never()).selectByUrl(anyString());
+    verify(galleryMapper, never()).selectBySrc(anyString());
+  }
+
+  @Test
+  void siteMusicCannotBeDeclaredAsAVideoTrack() {
+    assertEquals("本站曲库只能作为音频背景音乐",
+        messageOf("/music/a.mp3", "video", ResourceType.photo));
+  }
+
+  @Test
+  void aProtocolRelativeAddressIsStillRejectedByOwnership() {
+    // //evil.com/music/a.mp3 的 URI path 正好是 /music/a.mp3，前缀检查会放行它。
+    // 它进不了站内曲库那一支（不以 "/music/" 开头），所以仍然落到归属判定上。
+    assertEquals("背景音乐必须是本功能上传的地址，或画廊里已有资源的地址",
+        messageOf("//evil.com/music/a.mp3", "audio", ResourceType.photo));
+  }
+
+  @Test
+  void aSiteMusicPathThatDoesNotMatchTheShapeIsRejected() {
+    assertEquals("本站曲库地址无效", messageOf("/music/../../etc/passwd.mp3", "audio", ResourceType.photo));
+    assertEquals("本站曲库地址无效", messageOf("/music/nested/a.mp3", "audio", ResourceType.photo));
+    assertEquals("本站曲库地址无效", messageOf("/music/a.exe", "audio", ResourceType.photo));
+    assertEquals("本站曲库地址无效", messageOf("/music/a", "audio", ResourceType.photo));
+  }
+
+  @Test
+  void siteMusicPathsAreMatchedCaseInsensitivelyOnTheExtensionOnly() {
+    assertEquals(new GalleryBgmResolver.Bgm("/music/a.MP3", "audio"),
+        resolver().resolve("/music/a.MP3", "audio", ResourceType.photo));
+    // 目录名大小写敏感：/Music/ 不是站内曲库那一支，落到 OSS 前缀检查上
+    assertEquals("背景音乐必须是本站上传的音频或视频",
+        messageOf("/Music/a.mp3", "audio", ResourceType.photo));
   }
 }

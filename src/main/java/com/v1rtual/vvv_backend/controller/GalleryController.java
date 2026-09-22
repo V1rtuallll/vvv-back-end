@@ -23,6 +23,7 @@ import com.v1rtual.vvv_backend.service.gallery.GalleryQueryService;
 import com.v1rtual.vvv_backend.service.gallery.GalleryUploadService;
 import com.v1rtual.vvv_backend.vo.GalleryBgmUploadVO;
 import com.v1rtual.vvv_backend.vo.GalleryItemVO;
+import com.v1rtual.vvv_backend.vo.GalleryMediaItemVO;
 import com.v1rtual.vvv_backend.vo.GalleryMetadataVO;
 import com.v1rtual.vvv_backend.vo.PageResultVO;
 import com.v1rtual.vvv_backend.vo.Result;
@@ -60,6 +61,21 @@ public class GalleryController {
       @RequestParam(required = false) String bgmSrc,
       @RequestParam(required = false) String bgmType) {
     return uploadService.uploadOne(file, title, description, clientUploadId, currentUser(), bgmSrc, bgmType);
+  }
+
+  /**
+   * 往一个已有作品追加一个媒体。多选上传时，除第一个文件之外都走这里。
+   *
+   * 与 {@code POST /api/gallery/upload} 是两个入口而不是一个带开关的入口：
+   * 那个建作品行、这个不建，两者的副作用完全不同，合成一个会让「这次到底建没建行」
+   * 变成调用方必须记住的事。
+   */
+  @PostMapping("/{id}/media")
+  public Result<GalleryMediaItemVO> appendMedia(
+      @PathVariable Long id,
+      @RequestParam("file") MultipartFile file,
+      @RequestParam("clientMediaId") String clientMediaId) {
+    return uploadService.appendMedia(id, file, clientMediaId, currentUser());
   }
 
   /**

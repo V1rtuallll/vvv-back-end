@@ -60,6 +60,59 @@ public class GalleryMediaService {
         .build());
   }
 
+  /**
+   * 往作品的末尾追加一个媒体。
+   *
+   * 排到末尾而不是让调用方指定位置：编辑弹窗里「先删几个再加几个」会让客户端的
+   * 槽位计算很容易撞上还活着的行，而末尾永远空着。真正的顺序由整组提交一次性定下来。
+   *
+   * **不碰封面。** 末尾不可能把 sort_order 0 挤掉，所以 I1/I2 天然仍然成立。
+   *
+   * @param clientMediaId 调用方的幂等键；超时重试时不重复插入
+   */
+  public GalleryMedia append(Long galleryId, String src, ResourceType type, String clientMediaId) {
+    int sortOrder = galleryMediaMapper.nextSortOrder(galleryId);
+    GalleryMedia media = GalleryMedia.builder()
+        .galleryId(galleryId)
+        .src(src)
+        .type(type)
+        .sortOrder(sortOrder)
+        .clientMediaId(clientMediaId)
+        .build();
+    if (galleryMediaMapper.insert(media) != 1) {
+      throw new IllegalStateException("媒体追加失败");
+    }
+    return media;
+  }
+
+  /**
+   * 幂等键对应的那条媒体；没有则返回 null。
+   *
+   * 追加路径要在传 OSS **之前**知道这次是不是重试 —— 是重试就不该再占一次 OSS。
+   * 媒体表只经这一个类对外，所以这个查询也从这里过。
+   */
+  public GalleryMedia findByClientMediaId(String clientMediaId) {
+    return galleryMediaMapper.selectByClientMediaId(clientMediaId);
+  }
+
+  /**
+   * 两个类型算不算同一族。同一作品的媒体必须同族（I3）。
+   *
+   * 图片与动图是一族：用户多选时不会区分 jpg 与 gif，把它们拆成两批没有道理。
+   * 视频与音乐各自单独成族 —— 一个作品里混进一段视频会让详情弹窗在静图与
+   * 播放器之间跳来跳去，混进一首音乐则连展示形态都对不上。
+   *
+   * 放在这里而不是各自的校验里：追加与整组提交两条路径都要判它，
+   * 分成两份的话，规则一改就会变成「一条路径放行、另一条拒绝」的半挡状态。
+   */
+  public static boolean sameFamily(ResourceType a, ResourceType b) {
+    if (a == null || b == null) return false;
+    boolean aIsStill = a == ResourceType.photo || a == ResourceType.gif;
+    boolean bIsStill = b == ResourceType.photo || b == ResourceType.gif;
+    if (aIsStill && bIsStill) return true;
+    return a == b;
+  }
+
   /** 一条作品的完整媒体列表，按翻阅顺序。作品不存在时返回空列表。 */
   public List<GalleryMedia> listOf(Long galleryId) {
     if (galleryId == null) return List.of();

@@ -15,6 +15,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import com.v1rtual.vvv_backend.entity.Gallery;
 import com.v1rtual.vvv_backend.entity.GalleryBgmMedia;
+import com.v1rtual.vvv_backend.entity.GalleryMedia;
 import com.v1rtual.vvv_backend.entity.ResourceType;
 import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.mapper.GalleryBgmMediaMapper;
@@ -26,6 +27,7 @@ import com.v1rtual.vvv_backend.service.media.TypedMediaStore;
 import com.v1rtual.vvv_backend.service.media.UploadValidator;
 import com.v1rtual.vvv_backend.util.OssUtil;
 import com.v1rtual.vvv_backend.vo.GalleryBgmUploadVO;
+import com.v1rtual.vvv_backend.vo.GalleryMediaItemVO;
 import com.v1rtual.vvv_backend.vo.Result;
 import com.v1rtual.vvv_backend.vo.UploadLimitVO;
 import com.v1rtual.vvv_backend.vo.UploadResultVO;
@@ -46,6 +48,8 @@ import lombok.extern.slf4j.Slf4j;
 public class GalleryUploadService {
 
   private static final int CLIENT_UPLOAD_ID_MAX_LENGTH = 64;
+
+  private static final int CLIENT_MEDIA_ID_MAX_LENGTH = 64;
 
   private static final String OSS_CLEANUP_REASON = "上传入库失败时 OSS 对象清理失败";
 
@@ -155,6 +159,76 @@ public class GalleryUploadService {
       log.error("上传入库失败：{}", file.getOriginalFilename(), e);
       markRollback();
       return Result.error(500, "资源入库失败");
+    }
+  }
+
+  /**
+   * 往一个已有作品追加一个媒体 —— 多选上传里除第一个文件之外都走这里。
+   *
+   * 与 {@link #uploadOne} 的关键差别：它不建作品行、不写类型表。那个文件只属于
+   * 这个作品的媒体列表（I2），不是一条独立的画廊资源 —— 首页随机与 ?src= 深链
+   * 因此仍然只会看到作品封面。
+   *
+   * @param clientMediaId 调用方为这次追加生成的 ID，用于超时重试的服务端幂等；必传
+   */
+  @Transactional
+  public Result<GalleryMediaItemVO> appendMedia(Long id, MultipartFile file, String clientMediaId,
+      User user) {
+    if (user == null) return Result.error(401, "未登录或登录已过期");
+    if (id == null || id <= 0) return Result.error(400, "资源ID无效");
+    if (file == null || file.isEmpty()) return Result.error(400, "文件不能为空");
+    if (StringUtils.isBlank(clientMediaId)) return Result.error(400, "缺少客户端媒体ID");
+
+    String mediaId = clientMediaId.trim();
+    if (mediaId.length() > CLIENT_MEDIA_ID_MAX_LENGTH) {
+      return Result.error(400, "客户端媒体ID过长，最多 " + CLIENT_MEDIA_ID_MAX_LENGTH + " 个字符");
+    }
+
+    Gallery gallery = galleryMapper.selectById(id);
+    if (gallery == null) return Result.error(404, "资源不存在");
+    if (!canManage(gallery.getUserId(), user)) return Result.error(403, OwnerAccess.DENIED_MESSAGE);
+
+    // 幂等：同一次追加的超时重试直接返回已入库的那条，不重复占 OSS、不重复插入。
+    // 校验它确实属于这个作品 —— 幂等键是全局唯一的，拿别的作品的键来查会串条
+    GalleryMedia existing = galleryMediaService.findByClientMediaId(mediaId);
+    if (existing != null && id.equals(existing.getGalleryId())) {
+      return Result.success(toMediaItem(existing), "该文件已上传，返回已有媒体");
+    }
+
+    ResourceType type;
+    try {
+      type = uploadValidator.validateAndResolveMedia(file);
+    } catch (IllegalArgumentException e) {
+      return Result.error(400, e.getMessage());
+    }
+    // 同族校验在传 OSS **之前**：反过来的话不合法的那份已经上去了，还得再删一次
+    if (!GalleryMediaService.sameFamily(gallery.getType(), type)) {
+      return Result.error(400, "这个作品的媒体类型是 " + gallery.getType()
+          + "，不能加入 " + type + "。换类型请新建一个作品");
+    }
+
+    String url = null;
+    try {
+      url = ossUtil.upload(file, MediaTypeDirectory.directoryFor(type));
+      if (StringUtils.isBlank(url)) throw new IllegalStateException("OSS 未返回可访问地址");
+
+      GalleryMedia created = galleryMediaService.append(id, url, type, mediaId);
+      return Result.success(toMediaItem(created), "已加入作品");
+    } catch (IOException e) {
+      log.error("追加媒体时上传 OSS 失败：{}", file.getOriginalFilename(), e);
+      return Result.error(500, "上传文件失败");
+    } catch (DuplicateKeyException e) {
+      // 并发重试：另一个请求先落库了同一个 clientMediaId，返回先到的那条
+      if (url != null) cleanupOssObject(url);
+      markRollback();
+      GalleryMedia winner = galleryMediaService.findByClientMediaId(mediaId);
+      if (winner == null) return Result.error(500, "媒体入库失败");
+      return Result.success(toMediaItem(winner), "该文件已上传，返回已有媒体");
+    } catch (RuntimeException e) {
+      if (url != null) cleanupOssObject(url);
+      log.error("追加媒体入库失败：{}", file.getOriginalFilename(), e);
+      markRollback();
+      return Result.error(500, "媒体入库失败");
     }
   }
 
@@ -343,6 +417,14 @@ public class GalleryUploadService {
         .url(gallery.getSrc())
         .type(gallery.getType() == null ? null : gallery.getType().name())
         .status(status)
+        .build();
+  }
+
+  private GalleryMediaItemVO toMediaItem(GalleryMedia media) {
+    return GalleryMediaItemVO.builder()
+        .id(media.getId())
+        .src(media.getSrc())
+        .type(media.getType() == null ? null : media.getType().name())
         .build();
   }
 

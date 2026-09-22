@@ -9,8 +9,10 @@ import java.lang.reflect.Parameter;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.multipart.MultipartFile;
 
 /**
  * 单条查询的路由契约。路径写错不会在编译期暴露，只会在前端 404 时才发现；
@@ -53,5 +55,22 @@ class GalleryRouteMappingTest {
       assertNotNull(requestParam, parameter.getName() + " 应当是查询参数");
       assertFalse(requestParam.required(), parameter.getName() + " 缺省时应当由服务层判定，而不是框架");
     }
+  }
+
+  /**
+   * 追加媒体挂在作品下面，且是 POST。
+   *
+   * 身份不走参数：本项目的 SecurityContext 里放的是用户名（见 JwtAuthenticationFilter），
+   * 控制器一律用 currentUser() 去查实体 —— {@code @AuthenticationPrincipal User}
+   * 在这里的类型对不上，会静默解析成 null，每个请求都变成 401。
+   */
+  @Test
+  void appendingAMediaIsAPostUnderTheGalleryItem() throws Exception {
+    assertEquals("/api/gallery", GalleryController.class.getAnnotation(RequestMapping.class).value()[0]);
+
+    PostMapping mapping = GalleryController.class
+        .getMethod("appendMedia", Long.class, MultipartFile.class, String.class)
+        .getAnnotation(PostMapping.class);
+    assertEquals("/{id}/media", mapping.value()[0]);
   }
 }

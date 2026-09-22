@@ -24,6 +24,7 @@ import org.springframework.mock.web.MockMultipartFile;
 
 import com.v1rtual.vvv_backend.entity.Gallery;
 import com.v1rtual.vvv_backend.entity.GalleryBgmMedia;
+import com.v1rtual.vvv_backend.entity.GalleryMedia;
 import com.v1rtual.vvv_backend.entity.ResourceType;
 import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.mapper.GalleryBgmMediaMapper;
@@ -38,6 +39,7 @@ import com.v1rtual.vvv_backend.service.media.TypedMediaStore;
 import com.v1rtual.vvv_backend.service.media.UploadValidator;
 import com.v1rtual.vvv_backend.util.OssUtil;
 import com.v1rtual.vvv_backend.vo.GalleryBgmUploadVO;
+import com.v1rtual.vvv_backend.vo.GalleryMediaItemVO;
 import com.v1rtual.vvv_backend.vo.Result;
 import com.v1rtual.vvv_backend.vo.UploadLimitVO;
 import com.v1rtual.vvv_backend.vo.UploadResultVO;
@@ -103,6 +105,16 @@ class GalleryUploadServiceTest {
     when(galleryMediaService.insertFirst(any(), any(), any())).thenReturn(1);
     // 媒体列表的封面同步默认也写成功，理由同上：替换路径的用例关心的是别的分支
     when(galleryMediaService.updateCoverSrc(any(), any())).thenReturn(1);
+    // 追加默认也写成功，且返回刚交出去的那条（与真实实现一致）：用例关心的是别的分支时
+    // 不必每条都自己桩一次，而校验顺序一旦被改坏，那条用例红的是它自己该红的断言，
+    // 不是半路撞上一个没桩的 mock
+    when(galleryMediaService.append(any(), any(), any(), any())).thenAnswer(invocation ->
+        GalleryMedia.builder()
+            .id(11L)
+            .galleryId(invocation.getArgument(0, Long.class))
+            .src(invocation.getArgument(1, String.class))
+            .type(invocation.getArgument(2, ResourceType.class))
+            .build());
   }
 
   private GalleryUploadService service() {
@@ -604,5 +616,88 @@ class GalleryUploadServiceTest {
     verify(galleryMapper).countByBgmSrc("https://example.test/imgs/old.png");
     verify(galleryMediaService).updateCoverSrc(7L, "https://example.test/imgs/new.png");
     verify(ossUtil).deleteByPublicUrl("https://example.test/imgs/old.png");
+  }
+
+  // ===== 往已有作品追加媒体 =====
+
+  @Test
+  void appendingPutsTheNewFileAtTheEndOfTheWork() throws Exception {
+    when(galleryMapper.selectById(7L)).thenReturn(existingPhoto());
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    when(galleryMediaService.findByClientMediaId("cm-1")).thenReturn(null);
+    when(ossUtil.upload(any(), any())).thenReturn("https://example.test/imgs/b.png");
+    when(galleryMediaService.append(any(), any(), any(), any())).thenReturn(GalleryMedia.builder()
+        .id(11L).galleryId(7L).src("https://example.test/imgs/b.png")
+        .type(ResourceType.photo).sortOrder(1).build());
+
+    Result<GalleryMediaItemVO> result = service().appendMedia(7L, png(), "cm-1", member());
+
+    assertEquals(200, result.getCode());
+    assertEquals("https://example.test/imgs/b.png", result.getData().getSrc());
+    assertEquals("photo", result.getData().getType());
+    // 转交给媒体列表那条路径：新建作品行、写类型表都不该在这条路径上发生
+    verify(galleryMediaService).append(7L, "https://example.test/imgs/b.png", ResourceType.photo, "cm-1");
+    verify(galleryMapper, never()).insert(any());
+  }
+
+  @Test
+  void appendingTheSameClientMediaIdTwiceDoesNotUploadAgain() throws Exception {
+    GalleryMedia existing = GalleryMedia.builder()
+        .id(11L).galleryId(7L).src("https://example.test/imgs/b.png").type(ResourceType.photo)
+        .sortOrder(1).clientMediaId("cm-1").build();
+    when(galleryMapper.selectById(7L)).thenReturn(existingPhoto());
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    when(galleryMediaService.findByClientMediaId("cm-1")).thenReturn(existing);
+
+    Result<GalleryMediaItemVO> result = service().appendMedia(7L, png(), "cm-1", member());
+
+    assertEquals(200, result.getCode());
+    assertEquals(11L, result.getData().getId());
+    // 重试不能再占一次 OSS、也不能把同一个文件插第二遍
+    verify(ossUtil, never()).upload(any(), any());
+    verify(galleryMediaService, never()).append(any(), any(), any(), any());
+  }
+
+  @Test
+  void appendingRefusesAFileFromADifferentFamily() throws Exception {
+    Gallery video = Gallery.builder().id(7L).type(ResourceType.video)
+        .src("https://example.test/video/a.mp4").userId(1L).uploaderUsername("member").build();
+    when(galleryMapper.selectById(7L)).thenReturn(video);
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+
+    Result<GalleryMediaItemVO> result = service().appendMedia(7L, png(), "cm-1", member());
+
+    assertEquals(400, result.getCode());
+    // 必须在传 OSS **之前**拒绝：反过来的话文件已经上去了，还得再删一次
+    verify(ossUtil, never()).upload(any(), any());
+  }
+
+  @Test
+  void appendingRejectsOutsidersBeforeTouchingTheStorage() throws Exception {
+    Gallery other = Gallery.builder().id(7L).type(ResourceType.photo)
+        .src("https://example.test/imgs/old.png").userId(99L).uploaderUsername("other").build();
+    when(galleryMapper.selectById(7L)).thenReturn(other);
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+
+    assertEquals(403, service().appendMedia(7L, png(), "cm-1", member()).getCode());
+    verify(ossUtil, never()).upload(any(), any());
+  }
+
+  @Test
+  void appendingRequiresAClientMediaId() {
+    assertEquals(400, service().appendMedia(7L, png(), "  ", member()).getCode());
+  }
+
+  @Test
+  void appendingCleansUpTheUploadedObjectWhenTheInsertFails() throws Exception {
+    when(galleryMapper.selectById(7L)).thenReturn(existingPhoto());
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    when(galleryMediaService.findByClientMediaId("cm-1")).thenReturn(null);
+    when(ossUtil.upload(any(), any())).thenReturn("https://example.test/imgs/b.png");
+    when(galleryMediaService.append(any(), any(), any(), any()))
+        .thenThrow(new IllegalStateException("媒体追加失败"));
+
+    assertEquals(500, service().appendMedia(7L, png(), "cm-1", member()).getCode());
+    verify(ossUtil).deleteByPublicUrl("https://example.test/imgs/b.png");
   }
 }

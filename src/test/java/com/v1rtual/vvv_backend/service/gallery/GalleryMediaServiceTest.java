@@ -1,8 +1,10 @@
 package com.v1rtual.vvv_backend.service.gallery;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -57,6 +59,34 @@ class GalleryMediaServiceTest {
     assertEquals(0, captor.getValue().getSortOrder());
     // 首条是整组提交那条路径之外的、唯一的 null：它不参与「追加重试」的幂等
     assertNull(captor.getValue().getClientMediaId());
+  }
+
+  @Test
+  void appendPutsTheMediaAtTheEndOfTheList() {
+    when(galleryMediaMapper.nextSortOrder(7L)).thenReturn(3);
+    when(galleryMediaMapper.insert(any())).thenReturn(1);
+
+    service().append(7L, "https://example.test/imgs/c.png", ResourceType.photo, "cm-1");
+
+    var captor = org.mockito.ArgumentCaptor.forClass(GalleryMedia.class);
+    verify(galleryMediaMapper).insert(captor.capture());
+    assertEquals(3, captor.getValue().getSortOrder());
+    assertEquals("cm-1", captor.getValue().getClientMediaId());
+  }
+
+  @Test
+  void photoAndGifShareOneFamilyButVideoAndMusicEachStandAlone() {
+    // 一批里图片与动图可以混，视频与音乐各自成批 —— 这是产品决定的形状，
+    // 把它写在一个地方，追加与整组提交两条路径才不会各判各的
+    assertTrue(GalleryMediaService.sameFamily(ResourceType.photo, ResourceType.gif));
+    assertTrue(GalleryMediaService.sameFamily(ResourceType.gif, ResourceType.photo));
+    assertTrue(GalleryMediaService.sameFamily(ResourceType.video, ResourceType.video));
+    assertTrue(GalleryMediaService.sameFamily(ResourceType.music, ResourceType.music));
+
+    assertFalse(GalleryMediaService.sameFamily(ResourceType.photo, ResourceType.video));
+    assertFalse(GalleryMediaService.sameFamily(ResourceType.video, ResourceType.music));
+    assertFalse(GalleryMediaService.sameFamily(null, ResourceType.photo));
+    assertFalse(GalleryMediaService.sameFamily(ResourceType.photo, null));
   }
 
   @Test

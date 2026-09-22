@@ -32,6 +32,7 @@ import com.v1rtual.vvv_backend.mapper.PhotoMapper;
 import com.v1rtual.vvv_backend.mapper.VideoMapper;
 import com.v1rtual.vvv_backend.security.OwnerAccess;
 import com.v1rtual.vvv_backend.service.media.OssCleanupRecordService;
+import com.v1rtual.vvv_backend.service.media.TypedMediaStore;
 import com.v1rtual.vvv_backend.service.media.UploadValidator;
 import com.v1rtual.vvv_backend.util.OssUtil;
 import com.v1rtual.vvv_backend.vo.GalleryBgmUploadVO;
@@ -53,6 +54,18 @@ class GalleryUploadServiceTest {
    * 跑到返回结果 —— 用例红的才是「旧对象已经被删掉」，而不是半路撞上一个没桩的 mock。
    */
   private final MusicMapper musicMapper = mock(MusicMapper.class);
+  private final GifMapper gifMapper = mock(GifMapper.class);
+  private final VideoMapper videoMapper = mock(VideoMapper.class);
+  /**
+   * 真的分派器包四个 mock mapper，写法与下面的 bgmUsageGuard 一致。
+   *
+   * 目的是让「类型表被写了没有」这类断言仍然落在 mapper 上：改成像别的协作者一样
+   * 整个 mock 掉，断言就得退化成 verify(typedMediaStore).insert(...)，
+   * 那只能证明「转发了一次」，证明不了「转给了 photo 表而不是 gif 表」。
+   */
+  private final TypedMediaStore typedMediaStore =
+      new TypedMediaStore(photoMapper, gifMapper, videoMapper, musicMapper);
+  private final GalleryMediaService galleryMediaService = mock(GalleryMediaService.class);
   private final OssCleanupRecordService cleanupRecordService = mock(OssCleanupRecordService.class);
   private final MultipartProperties multipartProperties = new MultipartProperties();
   private final OwnerAccess ownerAccess = mock(OwnerAccess.class);
@@ -75,9 +88,21 @@ class GalleryUploadServiceTest {
   /** 用真的守卫包同一个 galleryMapper 桩：它会查到桩上，替换路径的用例不必再 mock 一层。 */
   private final GalleryBgmUsageGuard bgmUsageGuard = new GalleryBgmUsageGuard(galleryMapper);
 
+  /**
+   * 媒体列表默认写成功：多数用例关心的是别的分支，不该每条都自己桩一次；
+   * 要断言它没被调用的用例在自己的方法体里覆盖它。
+   *
+   * 桩登记在这里（字段初始化阶段，早于任何用例方法体），用例自己的 when(...)
+   * 因此**后登记、赢**。写进下面那个 service() 工厂里就不行 —— 工厂是在用例
+   * 方法体之后才被调用的，会把用例刚桩好的值盖回去，症状是「这条用例怎么都红」。
+   * 同一个理由写在上面 bgmResolver 的注释里。
+   */
+  {
+    when(galleryMediaService.insertFirst(any(), any(), any())).thenReturn(1);
+  }
+
   private GalleryUploadService service() {
-    return new GalleryUploadService(ossUtil, galleryMapper, photoMapper, mock(GifMapper.class),
-        mock(VideoMapper.class), musicMapper,
+    return new GalleryUploadService(ossUtil, galleryMapper, galleryMediaService, typedMediaStore,
         new UploadValidator(multipartProperties), cleanupRecordService, multipartProperties,
         ownerAccess, galleryBgmMediaMapper, bgmResolver, bgmUsageGuard);
   }
@@ -392,7 +417,7 @@ class GalleryUploadServiceTest {
     when(galleryMapper.selectById(7L)).thenReturn(stored);
     when(ownerAccess.isOwner(any())).thenReturn(false);
     when(ossUtil.upload(any(), any())).thenReturn("https://example.test/imgs/new.png");
-    when(galleryMapper.updateSrc(7L, "https://example.test/imgs/new.png")).thenReturn(1);
+    when(galleryMapper.updateSrcAndType(7L, "https://example.test/imgs/new.png", ResourceType.photo)).thenReturn(1);
     when(photoMapper.updateSrcBySrc("https://example.test/imgs/old.png",
         "https://example.test/imgs/new.png")).thenReturn(1);
 
@@ -401,7 +426,7 @@ class GalleryUploadServiceTest {
     assertEquals(200, result.getCode());
     assertEquals("https://example.test/imgs/new.png", result.getData().getUrl());
     // src 是两张表的关联键，必须一起改
-    verify(galleryMapper).updateSrc(7L, "https://example.test/imgs/new.png");
+    verify(galleryMapper).updateSrcAndType(7L, "https://example.test/imgs/new.png", ResourceType.photo);
     verify(photoMapper).updateSrcBySrc("https://example.test/imgs/old.png",
         "https://example.test/imgs/new.png");
     // 数据库已经指向新文件之后，才轮到删旧对象
@@ -419,7 +444,7 @@ class GalleryUploadServiceTest {
 
     assertEquals(400, result.getCode());
     verify(ossUtil, never()).upload(any(), any());
-    verify(galleryMapper, never()).updateSrc(any(), anyString());
+    verify(galleryMapper, never()).updateSrcAndType(any(), anyString(), any());
   }
 
   @Test
@@ -454,7 +479,7 @@ class GalleryUploadServiceTest {
     when(galleryMapper.selectById(7L)).thenReturn(existingPhoto());
     when(ownerAccess.isOwner(any())).thenReturn(false);
     when(ossUtil.upload(any(), any())).thenReturn("https://example.test/imgs/new.png");
-    when(galleryMapper.updateSrc(7L, "https://example.test/imgs/new.png")).thenReturn(0);
+    when(galleryMapper.updateSrcAndType(7L, "https://example.test/imgs/new.png", ResourceType.photo)).thenReturn(0);
 
     Result<UploadResultVO> result = service().replaceFile(7L, png(), member());
 
@@ -472,7 +497,7 @@ class GalleryUploadServiceTest {
     when(galleryMapper.selectById(7L)).thenReturn(existingPhoto());
     when(ownerAccess.isOwner(any())).thenReturn(false);
     when(ossUtil.upload(any(), any())).thenReturn("https://example.test/imgs/new.png");
-    when(galleryMapper.updateSrc(7L, "https://example.test/imgs/new.png")).thenReturn(1);
+    when(galleryMapper.updateSrcAndType(7L, "https://example.test/imgs/new.png", ResourceType.photo)).thenReturn(1);
     when(photoMapper.updateSrcBySrc(anyString(), anyString())).thenReturn(1);
     doThrow(new RuntimeException("oss down")).when(ossUtil)
         .deleteByPublicUrl("https://example.test/imgs/old.png");
@@ -509,7 +534,7 @@ class GalleryUploadServiceTest {
     // 桩通是为了变异实验：守卫一旦被挪到删除之后，流程会一路跑到返回，用例红的就落在
     // 「新文件没上传、src 没改、旧对象没删」这几条断言上，而不是半路撞上一个没桩的 mock。
     when(ossUtil.upload(any(), any())).thenReturn("https://example.test/music/new.mp3");
-    when(galleryMapper.updateSrc(7L, "https://example.test/music/new.mp3")).thenReturn(1);
+    when(galleryMapper.updateSrcAndType(7L, "https://example.test/music/new.mp3", ResourceType.music)).thenReturn(1);
     when(musicMapper.updateSrcBySrc(anyString(), anyString())).thenReturn(1);
 
     Result<UploadResultVO> result = service().replaceFile(7L, mp3(), member());
@@ -518,7 +543,7 @@ class GalleryUploadServiceTest {
     assertTrue(result.getMsg().contains("2"),
         "拒绝理由要说清被几张图占用，实际是：" + result.getMsg());
     verify(ossUtil, never()).upload(any(), any());
-    verify(galleryMapper, never()).updateSrc(any(), anyString());
+    verify(galleryMapper, never()).updateSrcAndType(any(), anyString(), any());
     verify(musicMapper, never()).updateSrcBySrc(anyString(), anyString());
     verify(ossUtil, never()).deleteByPublicUrl(anyString());
   }
@@ -530,7 +555,7 @@ class GalleryUploadServiceTest {
     when(ownerAccess.isOwner(any())).thenReturn(false);
     when(galleryMapper.countByBgmSrc("https://example.test/imgs/old.png")).thenReturn(0L);
     when(ossUtil.upload(any(), any())).thenReturn("https://example.test/imgs/new.png");
-    when(galleryMapper.updateSrc(7L, "https://example.test/imgs/new.png")).thenReturn(1);
+    when(galleryMapper.updateSrcAndType(7L, "https://example.test/imgs/new.png", ResourceType.photo)).thenReturn(1);
     when(photoMapper.updateSrcBySrc(anyString(), anyString())).thenReturn(1);
 
     Result<UploadResultVO> result = service().replaceFile(7L, png(), member());

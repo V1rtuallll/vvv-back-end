@@ -14,6 +14,7 @@ import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 import com.v1rtual.vvv_backend.entity.Gallery;
+import com.v1rtual.vvv_backend.entity.ResourceType;
 import com.v1rtual.vvv_backend.vo.GalleryVO;
 
 @Mapper
@@ -141,11 +142,15 @@ public interface GalleryMapper {
   List<Map<String, Object>> selectTitlesBySrcs(@Param("srcs") List<String> srcs);
 
   /**
-   * 只改 src。src 是 gallery 与类型表之间的关联键，替换文件时必须两张表一起改，
-   * 所以单独开一个方法，而不是走 updateMetadata 的元数据白名单。
+   * 改封面的地址与类型。src 是 gallery 与类型表之间的关联键，替换文件时必须两张表
+   * 一起改，所以单独开一个方法，而不是走 updateMetadata 的元数据白名单。
+   *
+   * type 也在这里：同一作品的媒体只要求同族，而 photo 与 gif 是一族 ——
+   * 封面从一张 gif 换成一张 jpg 时，这一列必须跟着走，否则 gallery 表说它是动图、
+   * 类型表里却在 photo 表，两边从此对不上。
    */
-  @Update("UPDATE gallery SET src = #{src}, updated_at = NOW() WHERE id = #{id}")
-  int updateSrc(@Param("id") Long id, @Param("src") String src);
+  @Update("UPDATE gallery SET src = #{src}, type = #{type}, updated_at = NOW() WHERE id = #{id}")
+  int updateSrcAndType(@Param("id") Long id, @Param("src") String src, @Param("type") ResourceType type);
 
   // 点赞 +1
   @Update("UPDATE gallery SET likes = likes + 1 WHERE id = #{id}")

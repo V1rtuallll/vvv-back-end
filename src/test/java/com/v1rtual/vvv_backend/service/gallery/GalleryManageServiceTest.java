@@ -39,6 +39,14 @@ class GalleryManageServiceTest {
   private final GalleryMapper galleryMapper = mock(GalleryMapper.class);
   private final CommentMapper commentMapper = mock(CommentMapper.class);
   private final GalleryDeletionService deletionService = mock(GalleryDeletionService.class);
+  /**
+   * 媒体列表默认返回空表 —— 即一条长度为 0 的作品。
+   *
+   * 于是「删作品时连带清理组内其余媒体的 OSS 对象」这件事在本类里退化成
+   * 只清封面那一个，也就是改动之前的形状，既有的删除用例因此不必逐条加桩。
+   * 组内有多条媒体的场景由专门的那条新用例覆盖。
+   */
+  private final GalleryMediaService galleryMediaService = mock(GalleryMediaService.class);
   private final OssCleanupRecordService cleanupRecordService = mock(OssCleanupRecordService.class);
   private final OssUtil ossUtil = mock(OssUtil.class);
   private final OwnerAccess ownerAccess = mock(OwnerAccess.class);
@@ -54,7 +62,7 @@ class GalleryManageServiceTest {
 
   private GalleryManageService service() {
     return new GalleryManageService(galleryMapper, commentMapper, deletionService,
-        cleanupRecordService, ossUtil, ownerAccess, bgmResolver, bgmUsageGuard);
+        galleryMediaService, cleanupRecordService, ossUtil, ownerAccess, bgmResolver, bgmUsageGuard);
   }
 
   private static User user(Long id, String name) {

@@ -1,6 +1,8 @@
 package com.v1rtual.vvv_backend.service.gallery;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -9,6 +11,7 @@ import org.springframework.stereotype.Service;
 
 import com.v1rtual.vvv_backend.entity.Comment;
 import com.v1rtual.vvv_backend.entity.Gallery;
+import com.v1rtual.vvv_backend.entity.GalleryMedia;
 import com.v1rtual.vvv_backend.entity.TargetType;
 import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.mapper.CommentMapper;
@@ -48,6 +51,7 @@ public class GalleryManageService {
   private final GalleryMapper galleryMapper;
   private final CommentMapper commentMapper;
   private final GalleryDeletionService deletionService;
+  private final GalleryMediaService galleryMediaService;
   private final OssCleanupRecordService ossCleanupRecordService;
   private final OssUtil ossUtil;
   private final OwnerAccess ownerAccess;
@@ -122,10 +126,13 @@ public class GalleryManageService {
     Result<Void> blocked = bgmUsageGuard.blockIfUsedAsBgm(gallery.getSrc());
     if (blocked != null) return blocked;
 
+    // 组内其余媒体的 OSS 对象同样要清，而它们的地址只能在删库**之前**读出来
+    List<String> doomedObjects = collectOssObjects(gallery);
+
     // 幂等：并发重复删除时后一个请求拿到的行数会是 0
     if (deletionService.deleteGallery(gallery) == 0) return Result.error(404, "资源不存在");
 
-    if (!deleteOssObject(gallery.getSrc())) {
+    if (!deleteOssObjects(doomedObjects)) {
       return Result.error(500, "资源已删除，但 OSS 对象清理失败，已记录待重试");
     }
     return Result.success("删除成功");
@@ -168,13 +175,52 @@ public class GalleryManageService {
     // cancelUpload 只处理刚刚这一次上传，那个资源从来没人见过
     //（它要等上传跑完、列表刷新之后才可能被别人挑中），不可能已经被人配成 BGM。
     // 真到了「它已经被人配上」的状态，走的是删除路径，那里有闸。
+    // 被取消的这次上传通常只有一条媒体，但多选上传的第一个文件走的就是这条路，
+    // 所以照样按整组来收
+    List<String> doomedObjects = collectOssObjects(gallery);
+
     // 并发下另一个请求已经删掉了，同样视为成功
     if (deletionService.deleteGallery(gallery) == 0) return Result.success("这次上传没有产生资源");
 
-    if (!deleteOssObject(gallery.getSrc())) {
+    if (!deleteOssObjects(doomedObjects)) {
       return Result.error(500, "资源已删除，但 OSS 对象清理失败，已记录待重试");
     }
     return Result.success("已取消这次上传");
+  }
+
+  /**
+   * 这条作品占用的全部 OSS 对象：封面 + 组内其余媒体。
+   *
+   * **必须在删库之前调用。** gallery_media 的行删掉之后，组内那些地址就没有任何
+   * 线索了 —— 外键也代劳不了，正是为了不丢线索才刻意不给这张表加外键
+   *（见 V008 迁移的「为什么不加外键」）。
+   *
+   * 封面取 gallery 行上的那个，而不是再查一次 media：两者由 I1 保证相同，
+   * 而 gallery 行上这个值不依赖 gallery_media 还在不在。
+   */
+  private List<String> collectOssObjects(Gallery gallery) {
+    List<String> srcs = new ArrayList<>();
+    if (StringUtils.isNotBlank(gallery.getSrc())) srcs.add(gallery.getSrc());
+    for (GalleryMedia media : galleryMediaService.listOf(gallery.getId())) {
+      if (StringUtils.isNotBlank(media.getSrc()) && !media.getSrc().equals(gallery.getSrc())) {
+        srcs.add(media.getSrc());
+      }
+    }
+    return srcs;
+  }
+
+  /**
+   * 逐个删，一个都不跳过；只要有一个没删掉就返回 false。
+   *
+   * 失败的各自已经落进可重试记录（见 {@link #deleteOssObject}），所以这里不必
+   * 区分是谁失败 —— 用户看到的都是同一句话：库已经删干净了，桶里还剩东西。
+   */
+  private boolean deleteOssObjects(List<String> srcs) {
+    boolean allDeleted = true;
+    for (String src : srcs) {
+      if (!deleteOssObject(src)) allDeleted = false;
+    }
+    return allDeleted;
   }
 
   /** 作者本人或管理员。管理员判定复用 OwnerAccess，与后台入口保持同一个口径。 */

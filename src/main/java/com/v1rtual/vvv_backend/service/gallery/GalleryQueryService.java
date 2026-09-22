@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 
 import com.v1rtual.vvv_backend.entity.Comment;
 import com.v1rtual.vvv_backend.entity.Gallery;
+import com.v1rtual.vvv_backend.entity.GalleryMedia;
 import com.v1rtual.vvv_backend.entity.ResourceType;
 import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.mapper.CommentLikeMapper;
@@ -26,6 +27,7 @@ import com.v1rtual.vvv_backend.mapper.GalleryMapper;
 import com.v1rtual.vvv_backend.mapper.UserMapper;
 import com.v1rtual.vvv_backend.service.PageParams;
 import com.v1rtual.vvv_backend.vo.GalleryItemVO;
+import com.v1rtual.vvv_backend.vo.GalleryMediaItemVO;
 import com.v1rtual.vvv_backend.vo.PageResultVO;
 import com.v1rtual.vvv_backend.vo.Result;
 
@@ -51,6 +53,7 @@ public class GalleryQueryService {
   private final CommentLikeMapper commentLikeMapper;
   private final GalleryLikeMapper galleryLikeMapper;
   private final GalleryBgmMediaMapper galleryBgmMediaMapper;
+  private final GalleryMediaService galleryMediaService;
 
   public Result<PageResultVO<GalleryItemVO>> list(int page, int limit, String type) {
     if (!PageParams.isValid(page, limit)) {
@@ -66,10 +69,12 @@ public class GalleryQueryService {
     Map<Long, User> userMap = loadUploaders(galleryList);
     Map<Long, Long> commentCounts = countCommentsByGalleryId(galleryList);
     Map<String, String> bgmTitles = resolveBgmTitles(galleryList);
+    Map<Long, List<GalleryMedia>> mediaMap = loadMedia(galleryList);
 
     List<GalleryItemVO> items = galleryList.stream()
         .map(gallery -> toItem(gallery, userMap.get(gallery.getUserId()),
-            commentCounts.getOrDefault(gallery.getId(), 0L), bgmTitles.get(gallery.getBgmSrc())))
+            commentCounts.getOrDefault(gallery.getId(), 0L), bgmTitles.get(gallery.getBgmSrc()),
+            mediaMap.get(gallery.getId())))
         .collect(Collectors.toList());
 
     return Result.success(PageResultVO.<GalleryItemVO>builder()
@@ -103,7 +108,8 @@ public class GalleryQueryService {
     Map<Long, User> userMap = loadUploaders(single);
     long commentCount = countCommentsByGalleryId(single).getOrDefault(gallery.getId(), 0L);
     String bgmTitle = resolveBgmTitles(single).get(gallery.getBgmSrc());
-    return Result.success(toItem(gallery, userMap.get(gallery.getUserId()), commentCount, bgmTitle), "加载成功");
+    return Result.success(toItem(gallery, userMap.get(gallery.getUserId()), commentCount, bgmTitle,
+        galleryMediaService.listOf(gallery.getId())), "加载成功");
   }
 
   /**
@@ -135,8 +141,10 @@ public class GalleryQueryService {
 
     // 选曲界面不展示评论数，传 0：不为一次挑歌白跑一遍聚合查询。
     // BGM 名字同理传 null —— 选曲界面列的是候选自己，它配过什么曲子不在这一屏里。
+    // 媒体列表也一并省掉：这一屏只为挑一首曲子，不展示也不翻阅媒体，
+    // 而候选是不分页的，为它多查一遍媒体没有任何回报。
     List<GalleryItemVO> items = candidates.stream()
-        .map(gallery -> toItem(gallery, userMap.get(gallery.getUserId()), 0L, null))
+        .map(gallery -> toItem(gallery, userMap.get(gallery.getUserId()), 0L, null, null))
         .collect(Collectors.toList());
     return Result.success(items, "加载成功");
   }
@@ -170,8 +178,13 @@ public class GalleryQueryService {
    *
    * @param commentCount 评论数。候选列表不展示评论数，调用方传 0，
    *                     免得为一次选曲的操作白跑一遍聚合查询。
+   * @param media        这条作品的媒体列表。空/null 表示「这次查询没有带上它」
+   *                     （候选列表就是如此），下发成空数组；前端的兜底规则是
+   *                     「空数组 = 长度为 1 的作品」，所以这里不能替它补一条假的自己 ——
+   *                     那会让「没带」与「真的只有一条」混成同一种形状。
    */
-  private GalleryItemVO toItem(Gallery gallery, User uploader, long commentCount, String bgmTitle) {
+  private GalleryItemVO toItem(Gallery gallery, User uploader, long commentCount, String bgmTitle,
+      List<GalleryMedia> media) {
     return GalleryItemVO.builder()
         .id(gallery.getId())
         .type(gallery.getType() == null ? null : gallery.getType().name())
@@ -189,7 +202,31 @@ public class GalleryQueryService {
         .bgmSrc(gallery.getBgmSrc())
         .bgmType(gallery.getBgmType())
         .bgmTitle(bgmTitle)
+        .media(toMediaItems(media))
         .build();
+  }
+
+  private static List<GalleryMediaItemVO> toMediaItems(List<GalleryMedia> media) {
+    if (media == null || media.isEmpty()) return List.of();
+    return media.stream()
+        .map(item -> GalleryMediaItemVO.builder()
+            .id(item.getId())
+            .src(item.getSrc())
+            .type(item.getType() == null ? null : item.getType().name())
+            .build())
+        .collect(Collectors.toList());
+  }
+
+  /**
+   * 整页作品的媒体列表，一次查完。
+   *
+   * 空页直接返回空表：{@code IN ()} 不是合法 SQL，这个判断必须在 SQL 之前。
+   */
+  private Map<Long, List<GalleryMedia>> loadMedia(List<Gallery> galleries) {
+    if (galleries == null || galleries.isEmpty()) return Map.of();
+    List<Long> ids = galleries.stream().map(Gallery::getId).filter(Objects::nonNull).toList();
+    if (ids.isEmpty()) return Map.of();
+    return galleryMediaService.listByGalleryIds(ids);
   }
 
   /**

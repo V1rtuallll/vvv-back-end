@@ -381,7 +381,7 @@ class GalleryQueryServiceTest {
     when(userMapper.selectByIds(List.of(7L))).thenReturn(List.of(uploader));
     GalleryQueryService service = new GalleryQueryService(galleryMapper, mock(CommentMapper.class),
         userMapper, mock(CommentLikeMapper.class), mock(GalleryLikeMapper.class),
-        mock(GalleryBgmMediaMapper.class));
+        mock(GalleryBgmMediaMapper.class), mock(GalleryMediaService.class));
 
     Result<List<GalleryItemVO>> result = service.bgmCandidates();
 
@@ -525,7 +525,8 @@ class GalleryQueryServiceTest {
     when(bgmMediaMapper.selectTitlesByUrls(List.of(SONG)))
         .thenReturn(List.of(Map.of("url", SONG, "title", "Lexapro Delirium.mp3")));
     GalleryQueryService service = new GalleryQueryService(galleryMapper, commentMapper, userMapper,
-        mock(CommentLikeMapper.class), mock(GalleryLikeMapper.class), bgmMediaMapper);
+        mock(CommentLikeMapper.class), mock(GalleryLikeMapper.class), bgmMediaMapper,
+        mock(GalleryMediaService.class));
 
     Result<GalleryItemVO> result = service.item(9L, null);
 
@@ -565,8 +566,20 @@ class GalleryQueryServiceTest {
 
   private GalleryQueryService service(GalleryMapper galleryMapper, CommentMapper commentMapper,
       GalleryBgmMediaMapper galleryBgmMediaMapper) {
+    return service(galleryMapper, commentMapper, galleryBgmMediaMapper,
+        mock(GalleryMediaService.class));
+  }
+
+  /**
+   * 媒体列表默认是空表（Mockito 对 List 返回值给的就是空 List），
+   * 于是「只有封面」这条最老的形状在多数用例里天然成立；
+   * 要断言翻阅列表的用例自己传一个带媒体的 mock 进来。
+   */
+  private GalleryQueryService service(GalleryMapper galleryMapper, CommentMapper commentMapper,
+      GalleryBgmMediaMapper galleryBgmMediaMapper, GalleryMediaService galleryMediaService) {
     return new GalleryQueryService(galleryMapper, commentMapper, mock(UserMapper.class),
-        mock(CommentLikeMapper.class), mock(GalleryLikeMapper.class), galleryBgmMediaMapper);
+        mock(CommentLikeMapper.class), mock(GalleryLikeMapper.class), galleryBgmMediaMapper,
+        galleryMediaService);
   }
 
   private Map<String, Object> row(Long targetId, Long total) {

@@ -1,6 +1,7 @@
 package com.v1rtual.vvv_backend.vo;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 import lombok.Builder;
 import lombok.Data;
@@ -43,4 +44,20 @@ public class GalleryItemVO {
    * 所以它缺失时播放照常，只是那行字少一截。
    */
   private String bgmTitle;
+
+  /**
+   * 这条作品的媒体列表，按翻阅顺序。
+   *
+   * {@link #src} / {@link #type} 就是这里的第 0 条（封面），两者由服务端的 I1 保证一致。
+   * 详情弹窗左右翻阅读的是这个数组；只写 {@code src} 的话，弹窗打开时只会看到封面，
+   * 而且**页面不报错**，翻不动也不会有任何提示。
+   *
+   * **列表接口也下发它**，不是只给详情：前端点开卡片时用的是列表里那一行
+   *（{@code useGalleryPage.openDetailModal}），不会再按 id 请求一次。
+   *
+   * 为空表示「这次查询没有带上媒体列表」（BGM 候选列表就是如此，它只为选曲服务，
+   * 不展示媒体）。前端拿到空数组时按「长度为 1 的作品」兜底成 `[自身]`，
+   * 所以这是一种合法形状，而不是缺失。
+   */
+  private List<GalleryMediaItemVO> media;
 }

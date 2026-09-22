@@ -18,10 +18,7 @@ import com.v1rtual.vvv_backend.mapper.CommentLikeMapper;
 import com.v1rtual.vvv_backend.mapper.CommentMapper;
 import com.v1rtual.vvv_backend.mapper.GalleryLikeMapper;
 import com.v1rtual.vvv_backend.mapper.GalleryMapper;
-import com.v1rtual.vvv_backend.mapper.GifMapper;
-import com.v1rtual.vvv_backend.mapper.MusicMapper;
-import com.v1rtual.vvv_backend.mapper.PhotoMapper;
-import com.v1rtual.vvv_backend.mapper.VideoMapper;
+import com.v1rtual.vvv_backend.service.media.TypedMediaStore;
 
 import lombok.RequiredArgsConstructor;
 
@@ -36,18 +33,21 @@ import lombok.RequiredArgsConstructor;
 public class GalleryDeletionService {
 
   private final GalleryMapper galleryMapper;
-  private final PhotoMapper photoMapper;
-  private final GifMapper gifMapper;
-  private final VideoMapper videoMapper;
-  private final MusicMapper musicMapper;
+  private final GalleryMediaService galleryMediaService;
+  private final TypedMediaStore typedMediaStore;
   private final GalleryLikeMapper galleryLikeMapper;
   private final CommentMapper commentMapper;
   private final CommentLikeMapper commentLikeMapper;
 
   /**
-   * 删除 Gallery 行、对应类型表行、点赞和评论（含子评论及其点赞）。
+   * 删除 Gallery 行、媒体列表、对应类型表行、点赞和评论（含子评论及其点赞）。
    *
-   * comment 表对 gallery 没有任何外键约束，删 gallery 不会带走评论，必须显式清理。
+   * comment 表与 gallery_media 表对 gallery 都没有外键约束，删 gallery 不会带走它们，
+   * 必须显式清理。
+   *
+   * **不碰 OSS。** 桶里那些对象的清理在 {@link GalleryManageService} 里做，
+   * 而且必须在调用本方法**之前**把每个媒体的 src 读出来 —— 行删掉之后，
+   * 那些地址就没有任何线索了（见 V008 迁移的「为什么不加外键」）。
    *
    * @return 实际删除的 gallery 行数，0 表示该行已不存在
    */
@@ -56,6 +56,7 @@ public class GalleryDeletionService {
     deleteComments(collectCommentTreeIds(commentMapper.selectIdsByGalleryId(gallery.getId())));
     galleryLikeMapper.deleteByGalleryId(gallery.getId());
     deleteTypedMedia(gallery.getType(), gallery.getSrc());
+    galleryMediaService.deleteAllOf(gallery.getId());
     return galleryMapper.deleteById(gallery.getId());
   }
 
@@ -107,12 +108,6 @@ public class GalleryDeletionService {
   }
 
   private int deleteTypedMedia(ResourceType type, String src) {
-    if (type == null || StringUtils.isBlank(src)) return 0;
-    return switch (type) {
-      case photo -> photoMapper.deleteBySrc(src);
-      case gif -> gifMapper.deleteBySrc(src);
-      case video -> videoMapper.deleteBySrc(src);
-      case music -> musicMapper.deleteBySrc(src);
-    };
+    return typedMediaStore.deleteBySrc(type, src);
   }
 }

@@ -15,21 +15,14 @@ import org.springframework.web.multipart.MultipartFile;
 
 import com.v1rtual.vvv_backend.entity.Gallery;
 import com.v1rtual.vvv_backend.entity.GalleryBgmMedia;
-import com.v1rtual.vvv_backend.entity.Gif;
-import com.v1rtual.vvv_backend.entity.Music;
-import com.v1rtual.vvv_backend.entity.Photo;
 import com.v1rtual.vvv_backend.entity.ResourceType;
 import com.v1rtual.vvv_backend.entity.User;
-import com.v1rtual.vvv_backend.entity.Video;
 import com.v1rtual.vvv_backend.mapper.GalleryBgmMediaMapper;
 import com.v1rtual.vvv_backend.mapper.GalleryMapper;
-import com.v1rtual.vvv_backend.mapper.GifMapper;
-import com.v1rtual.vvv_backend.mapper.MusicMapper;
-import com.v1rtual.vvv_backend.mapper.PhotoMapper;
-import com.v1rtual.vvv_backend.mapper.VideoMapper;
 import com.v1rtual.vvv_backend.security.OwnerAccess;
 import com.v1rtual.vvv_backend.service.media.MediaTypeDirectory;
 import com.v1rtual.vvv_backend.service.media.OssCleanupRecordService;
+import com.v1rtual.vvv_backend.service.media.TypedMediaStore;
 import com.v1rtual.vvv_backend.service.media.UploadValidator;
 import com.v1rtual.vvv_backend.util.OssUtil;
 import com.v1rtual.vvv_backend.vo.GalleryBgmUploadVO;
@@ -58,10 +51,8 @@ public class GalleryUploadService {
 
   private final OssUtil ossUtil;
   private final GalleryMapper galleryMapper;
-  private final PhotoMapper photoMapper;
-  private final GifMapper gifMapper;
-  private final VideoMapper videoMapper;
-  private final MusicMapper musicMapper;
+  private final GalleryMediaService galleryMediaService;
+  private final TypedMediaStore typedMediaStore;
   private final UploadValidator uploadValidator;
   private final OssCleanupRecordService ossCleanupRecordService;
   private final MultipartProperties multipartProperties;
@@ -140,6 +131,12 @@ public class GalleryUploadService {
       if (insertTypedMedia(type, finalTitle, finalDescription, url, user) != 1) {
         throw new IllegalStateException("媒体资源入库失败");
       }
+      // 首条媒体。多选上传时后续文件由 POST /gallery/{id}/media 追加进来，
+      // 这条作品从此刻起就已经是一个「长度为 1 的媒体列表」——
+      // 没有「有 gallery 行却没有任何 media 行」的中间态，读取端就不必判空。
+      if (galleryMediaService.insertFirst(gallery, url, type) != 1) {
+        throw new IllegalStateException("媒体列表入库失败");
+      }
       return Result.success(toResource(gallery, "success"), "上传成功");
     } catch (IOException e) {
       // OSS 上传本身失败，没有需要清理的对象
@@ -212,7 +209,9 @@ public class GalleryUploadService {
       newUrl = ossUtil.upload(file, MediaTypeDirectory.directoryFor(type));
       if (StringUtils.isBlank(newUrl)) throw new IllegalStateException("OSS 未返回可访问地址");
 
-      if (galleryMapper.updateSrc(id, newUrl) != 1) throw new IllegalStateException("Gallery 资源更新失败");
+      // 类型在这里跟着一起写：换封面时新文件与旧文件同族即可，而 photo 与 gif 是一族，
+      // 只改 src 会让 gallery 表说它是动图、类型表里却在 photo 表
+      if (galleryMapper.updateSrcAndType(id, newUrl, type) != 1) throw new IllegalStateException("Gallery 资源更新失败");
       if (updateTypedSrc(type, oldSrc, newUrl) != 1) throw new IllegalStateException("媒体资源更新失败");
 
       // 数据库已经指向新文件，旧对象成了垃圾。删不掉只记待重试，不影响这次替换的结果。
@@ -238,13 +237,7 @@ public class GalleryUploadService {
   }
 
   private int updateTypedSrc(ResourceType type, String oldSrc, String newSrc) {
-    if (type == null || StringUtils.isBlank(oldSrc)) return 0;
-    return switch (type) {
-      case photo -> photoMapper.updateSrcBySrc(oldSrc, newSrc);
-      case gif -> gifMapper.updateSrcBySrc(oldSrc, newSrc);
-      case video -> videoMapper.updateSrcBySrc(oldSrc, newSrc);
-      case music -> musicMapper.updateSrcBySrc(oldSrc, newSrc);
-    };
+    return typedMediaStore.updateSrc(type, oldSrc, newSrc);
   }
 
   /**
@@ -347,16 +340,7 @@ public class GalleryUploadService {
   }
 
   private int insertTypedMedia(ResourceType type, String title, String description, String url, User user) {
-    return switch (type) {
-      case photo -> photoMapper.insert(Photo.builder().title(title).description(description).src(url)
-          .uploaderId(user.getId()).uploaderUsername(user.getUsername()).category(null).viewCount(0L).likes(0L).build());
-      case gif -> gifMapper.insert(Gif.builder().title(title).description(description).src(url)
-          .uploaderId(user.getId()).uploaderUsername(user.getUsername()).viewCount(0L).build());
-      case video -> videoMapper.insert(Video.builder().title(title).description(description).src(url)
-          .uploaderId(user.getId()).uploaderUsername(user.getUsername()).viewCount(0L).build());
-      case music -> musicMapper.insert(Music.builder().title(title).description(description).src(url)
-          .uploaderId(user.getId()).uploaderUsername(user.getUsername()).viewCount(0L).build());
-    };
+    return typedMediaStore.insert(type, title, description, url, user.getId(), user.getUsername());
   }
 
   /**

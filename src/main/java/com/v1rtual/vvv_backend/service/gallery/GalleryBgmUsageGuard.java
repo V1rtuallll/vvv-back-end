@@ -12,9 +12,9 @@ import lombok.RequiredArgsConstructor;
  * 「这个 OSS 对象还被别人当背景音乐用着吗」—— 全仓库唯一一处。
  *
  * 删掉一个 OSS 对象有两个入口：删除这条项（{@link GalleryManageService#deleteGallery}）、
- * 替换这条项的文件（{@link GalleryUploadService#replaceFile}）。两条路径都会让所有配了它的图
- * **静默静音**：页面不报错，就是没声音，也没有任何地方记一笔，因此不会有人去排查。
- * 所以两者共用同一道闸。
+ * 编辑时把它从作品的媒体列表里去掉（{@link GalleryMediaCommitService#commit}）。
+ * 两条路径都会让所有配了它的图**静默静音**：页面不报错，就是没声音，
+ * 也没有任何地方记一笔，因此不会有人去排查。所以两者共用同一道闸。
  *
  * 分成两份实现的话两边迟早漂移：一条路径挡住了、另一条没有，看着像有保护，
  * 其实可以从没挡住的那条绕进来 —— 与 {@link GalleryBgmResolver} 同样的理由。

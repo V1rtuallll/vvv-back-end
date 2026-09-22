@@ -88,9 +88,9 @@ public interface GalleryMapper {
    * 避免任何编辑入口改掉两表之间的关联键与归属。
    *
    * bgm_src / bgm_type 在这一句里：它们**总是**从实体上取值写回。
-   * 编辑接口在没提到 BGM 时不会动实体的这两个字段，而实体是 selectById（SELECT *）
-   * 读出来的，所以「这次不改 BGM」会原样写回同一个值，不会被清掉。
-   * 后台资源管理的编辑也走这一句，同样只是原样写回。
+   * 实体是 selectById（SELECT *）读出来的，所以调用方没碰过的列会原样写回、不会被清掉；
+   * 画廊的整组提交（GalleryMediaCommitService）会显式把它们改成请求里的值，
+   * 其中两个都为 null 表示清空 BGM；后台资源管理的编辑则只是原样写回。
    */
   @Update("UPDATE gallery SET title = #{title}, description = #{description}, alt = #{alt}, " +
       "tags = #{tags}, category = #{category}, duration = #{duration}, " +

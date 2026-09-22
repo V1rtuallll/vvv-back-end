@@ -2,14 +2,11 @@ package com.v1rtual.vvv_backend.service.gallery;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.doThrow;
-import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -17,7 +14,6 @@ import static org.mockito.Mockito.when;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InOrder;
 import org.springframework.boot.autoconfigure.web.servlet.MultipartProperties;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.mock.web.MockMultipartFile;
@@ -89,9 +85,6 @@ class GalleryUploadServiceTest {
     return resolver;
   }
 
-  /** 用真的守卫包同一个 galleryMapper 桩：它会查到桩上，替换路径的用例不必再 mock 一层。 */
-  private final GalleryBgmUsageGuard bgmUsageGuard = new GalleryBgmUsageGuard(galleryMapper);
-
   /**
    * 媒体列表默认写成功：多数用例关心的是别的分支，不该每条都自己桩一次；
    * 要断言它没被调用的用例在自己的方法体里覆盖它。
@@ -103,8 +96,6 @@ class GalleryUploadServiceTest {
    */
   {
     when(galleryMediaService.insertFirst(any(), any(), any())).thenReturn(1);
-    // 媒体列表的封面同步默认也写成功，理由同上：替换路径的用例关心的是别的分支
-    when(galleryMediaService.updateCoverSrc(any(), any())).thenReturn(1);
     // 追加默认也写成功，且返回刚交出去的那条（与真实实现一致）：用例关心的是别的分支时
     // 不必每条都自己桩一次，而校验顺序一旦被改坏，那条用例红的是它自己该红的断言，
     // 不是半路撞上一个没桩的 mock
@@ -120,7 +111,13 @@ class GalleryUploadServiceTest {
   private GalleryUploadService service() {
     return new GalleryUploadService(ossUtil, galleryMapper, galleryMediaService, typedMediaStore,
         new UploadValidator(multipartProperties), cleanupRecordService, multipartProperties,
-        ownerAccess, galleryBgmMediaMapper, bgmResolver, bgmUsageGuard);
+        ownerAccess, galleryBgmMediaMapper, bgmResolver);
+  }
+
+  /** 追加路径的用例用的那条已有作品 */
+  private static Gallery existingPhoto() {
+    return Gallery.builder().id(7L).type(ResourceType.photo).title("旧标题")
+        .src("https://example.test/imgs/old.png").userId(1L).build();
   }
 
   private static MockMultipartFile png() {
@@ -448,174 +445,6 @@ class GalleryUploadServiceTest {
     verify(galleryMapper).insert(saved.capture());
     assertNull(saved.getValue().getBgmSrc());
     assertNull(saved.getValue().getBgmType());
-  }
-
-  // ===== 替换资源文件 =====
-
-  private static Gallery existingPhoto() {
-    return Gallery.builder().id(7L).type(ResourceType.photo).title("旧标题")
-        .src("https://example.test/imgs/old.png").userId(1L).build();
-  }
-
-  @Test
-  void replaceUploadsTheNewFileAndUpdatesBothTablesSoTheyStayInSync() throws Exception {
-    Gallery stored = existingPhoto();
-    when(galleryMapper.selectById(7L)).thenReturn(stored);
-    when(ownerAccess.isOwner(any())).thenReturn(false);
-    when(ossUtil.upload(any(), any())).thenReturn("https://example.test/imgs/new.png");
-    when(galleryMapper.updateSrcAndType(7L, "https://example.test/imgs/new.png", ResourceType.photo)).thenReturn(1);
-    when(photoMapper.updateSrcBySrc("https://example.test/imgs/old.png",
-        "https://example.test/imgs/new.png")).thenReturn(1);
-
-    Result<UploadResultVO> result = service().replaceFile(7L, png(), member());
-
-    assertEquals(200, result.getCode());
-    assertEquals("https://example.test/imgs/new.png", result.getData().getUrl());
-    // src 是两张表的关联键，类型表必须跟着改
-    verify(photoMapper).updateSrcBySrc("https://example.test/imgs/old.png",
-        "https://example.test/imgs/new.png");
-    // 媒体列表是第三处，漏掉它 I1 当场就不成立：读到的封面是刚被删掉的那个对象，
-    // 详情弹窗的第一张图成了死链，而页面不报错。顺序也钉住 —— 封面行要赶在旧对象被删之前跟上
-    InOrder inOrder = inOrder(galleryMapper, galleryMediaService, ossUtil);
-    inOrder.verify(galleryMapper).updateSrcAndType(7L, "https://example.test/imgs/new.png", ResourceType.photo);
-    inOrder.verify(galleryMediaService).updateCoverSrc(7L, "https://example.test/imgs/new.png");
-    inOrder.verify(ossUtil).deleteByPublicUrl("https://example.test/imgs/old.png");
-  }
-
-  @Test
-  void replaceRejectsAFileOfADifferentType() throws Exception {
-    Gallery stored = Gallery.builder().id(7L).type(ResourceType.video).src("https://example.test/v/old.mp4")
-        .userId(1L).build();
-    when(galleryMapper.selectById(7L)).thenReturn(stored);
-    when(ownerAccess.isOwner(any())).thenReturn(false);
-
-    Result<UploadResultVO> result = service().replaceFile(7L, png(), member());
-
-    assertEquals(400, result.getCode());
-    verify(ossUtil, never()).upload(any(), any());
-    verify(galleryMapper, never()).updateSrcAndType(any(), anyString(), any());
-  }
-
-  @Test
-  void replaceRejectsOutsiders() throws Exception {
-    when(galleryMapper.selectById(7L)).thenReturn(existingPhoto());
-    when(ownerAccess.isOwner(any())).thenReturn(false);
-
-    Result<UploadResultVO> result = service().replaceFile(7L, png(), user(200L, "路人"));
-
-    assertEquals(403, result.getCode());
-    verify(ossUtil, never()).upload(any(), any());
-  }
-
-  @Test
-  void replaceRejectsAnonymousCallers() throws Exception {
-    Result<UploadResultVO> result = service().replaceFile(7L, png(), null);
-
-    assertEquals(401, result.getCode());
-    verify(ossUtil, never()).upload(any(), any());
-  }
-
-  @Test
-  void replaceReportsMissingResources() throws Exception {
-    when(galleryMapper.selectById(404L)).thenReturn(null);
-
-    assertEquals(404, service().replaceFile(404L, png(), member()).getCode());
-  }
-
-  /** 数据库没更新成功时，新传上去的对象必须清掉，否则每次失败都留一份垃圾 */
-  @Test
-  void replaceCleansUpTheNewObjectWhenTheDatabaseUpdateFails() throws Exception {
-    when(galleryMapper.selectById(7L)).thenReturn(existingPhoto());
-    when(ownerAccess.isOwner(any())).thenReturn(false);
-    when(ossUtil.upload(any(), any())).thenReturn("https://example.test/imgs/new.png");
-    when(galleryMapper.updateSrcAndType(7L, "https://example.test/imgs/new.png", ResourceType.photo)).thenReturn(0);
-
-    Result<UploadResultVO> result = service().replaceFile(7L, png(), member());
-
-    assertEquals(500, result.getCode());
-    verify(ossUtil).deleteByPublicUrl("https://example.test/imgs/new.png");
-    // 旧对象一个字都没动
-    verify(ossUtil, never()).deleteByPublicUrl("https://example.test/imgs/old.png");
-  }
-
-  /**
-   * 旧对象删不掉只是留了垃圾，用户的资源本身是好的 —— 不能把一次成功的替换报成失败。
-   */
-  @Test
-  void replaceStillSucceedsWhenTheOldObjectCannotBeDeleted() throws Exception {
-    when(galleryMapper.selectById(7L)).thenReturn(existingPhoto());
-    when(ownerAccess.isOwner(any())).thenReturn(false);
-    when(ossUtil.upload(any(), any())).thenReturn("https://example.test/imgs/new.png");
-    when(galleryMapper.updateSrcAndType(7L, "https://example.test/imgs/new.png", ResourceType.photo)).thenReturn(1);
-    when(photoMapper.updateSrcBySrc(anyString(), anyString())).thenReturn(1);
-    doThrow(new RuntimeException("oss down")).when(ossUtil)
-        .deleteByPublicUrl("https://example.test/imgs/old.png");
-
-    Result<UploadResultVO> result = service().replaceFile(7L, png(), member());
-
-    assertEquals(200, result.getCode());
-    verify(cleanupRecordService).recordFailure(contains("old.png"), anyString());
-    // 旧对象没删掉只影响那次清理，封面行照样要跟上，否则详情弹窗第一张图就是死链
-    verify(galleryMediaService).updateCoverSrc(7L, "https://example.test/imgs/new.png");
-  }
-
-  // ===== 替换保护：别把别人正在用的曲子换掉 =====
-
-  private static Gallery existingMusic() {
-    return Gallery.builder().id(7L).type(ResourceType.music).title("旧曲子")
-        .src("https://example.test/music/old.mp3").userId(1L).build();
-  }
-
-  /**
-   * 换掉一条正被别人配成背景音乐的项的文件时必须拒绝。
-   *
-   * 拒绝只是表面，这条用例真正要钉住的是「拒绝的时候**什么都没发生**」：
-   * 新文件没上传、gallery 的 src 没改、旧对象没删。删了的话，配了它的那些图
-   * 从那一刻起静默静音 —— 页面不报错，也没有任何地方记一笔。
-   *
-   * 用 music 项而不是 photo 项：只有 music / video 的地址才可能被人挑成背景音乐
-   *（resolver 规则 4 只放行 music/ 与 video/ 目录），照片地址被当 BGM 是到不了的状态。
-   */
-  @Test
-  void replaceRefusesWhenTheOldObjectIsUsedAsBackgroundMusic() throws Exception {
-    when(galleryMapper.selectById(7L)).thenReturn(existingMusic());
-    when(ownerAccess.isOwner(any())).thenReturn(false);
-    when(galleryMapper.countByBgmSrc("https://example.test/music/old.mp3")).thenReturn(2L);
-    // 下面三行把「一次成功的替换」整条路都桩通（桩不会计入调用次数，never() 断言不受影响）。
-    // 桩通是为了变异实验：守卫一旦被挪到删除之后，流程会一路跑到返回，用例红的就落在
-    // 「新文件没上传、src 没改、旧对象没删」这几条断言上，而不是半路撞上一个没桩的 mock。
-    when(ossUtil.upload(any(), any())).thenReturn("https://example.test/music/new.mp3");
-    when(galleryMapper.updateSrcAndType(7L, "https://example.test/music/new.mp3", ResourceType.music)).thenReturn(1);
-    when(musicMapper.updateSrcBySrc(anyString(), anyString())).thenReturn(1);
-
-    Result<UploadResultVO> result = service().replaceFile(7L, mp3(), member());
-
-    assertEquals(409, result.getCode());
-    assertTrue(result.getMsg().contains("2"),
-        "拒绝理由要说清被几张图占用，实际是：" + result.getMsg());
-    verify(ossUtil, never()).upload(any(), any());
-    verify(galleryMapper, never()).updateSrcAndType(any(), anyString(), any());
-    verify(musicMapper, never()).updateSrcBySrc(anyString(), anyString());
-    verify(ossUtil, never()).deleteByPublicUrl(anyString());
-  }
-
-  /** 没人在用这个地址时照常替换，别把普通替换也卡住 */
-  @Test
-  void replaceSucceedsWhenNothingUsesTheOldObjectAsBackgroundMusic() throws Exception {
-    when(galleryMapper.selectById(7L)).thenReturn(existingPhoto());
-    when(ownerAccess.isOwner(any())).thenReturn(false);
-    when(galleryMapper.countByBgmSrc("https://example.test/imgs/old.png")).thenReturn(0L);
-    when(ossUtil.upload(any(), any())).thenReturn("https://example.test/imgs/new.png");
-    when(galleryMapper.updateSrcAndType(7L, "https://example.test/imgs/new.png", ResourceType.photo)).thenReturn(1);
-    when(photoMapper.updateSrcBySrc(anyString(), anyString())).thenReturn(1);
-
-    Result<UploadResultVO> result = service().replaceFile(7L, png(), member());
-
-    assertEquals(200, result.getCode());
-    // 守卫确实被问过一次再放行，不是「碰巧没拦」
-    verify(galleryMapper).countByBgmSrc("https://example.test/imgs/old.png");
-    verify(galleryMediaService).updateCoverSrc(7L, "https://example.test/imgs/new.png");
-    verify(ossUtil).deleteByPublicUrl("https://example.test/imgs/old.png");
   }
 
   // ===== 往已有作品追加媒体 =====

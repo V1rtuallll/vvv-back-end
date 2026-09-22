@@ -3,28 +3,32 @@ package com.v1rtual.vvv_backend.controller;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.v1rtual.vvv_backend.dto.GalleryMediaCommitDTO;
 import com.v1rtual.vvv_backend.entity.Comment;
 import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.security.CurrentUserProvider;
 import com.v1rtual.vvv_backend.service.gallery.GalleryInteractionService;
 import com.v1rtual.vvv_backend.service.gallery.GalleryManageService;
+import com.v1rtual.vvv_backend.service.gallery.GalleryMediaCommitService;
 import com.v1rtual.vvv_backend.service.gallery.GalleryQueryService;
 import com.v1rtual.vvv_backend.service.gallery.GalleryUploadService;
 import com.v1rtual.vvv_backend.vo.GalleryBgmUploadVO;
 import com.v1rtual.vvv_backend.vo.GalleryItemVO;
 import com.v1rtual.vvv_backend.vo.GalleryMediaItemVO;
-import com.v1rtual.vvv_backend.vo.GalleryMetadataVO;
 import com.v1rtual.vvv_backend.vo.PageResultVO;
 import com.v1rtual.vvv_backend.vo.Result;
 import com.v1rtual.vvv_backend.vo.UploadLimitVO;
@@ -42,6 +46,8 @@ public class GalleryController {
   private final GalleryQueryService queryService;
   private final GalleryInteractionService interactionService;
   private final GalleryManageService manageService;
+  private final GalleryMediaCommitService mediaCommitService;
+  private final ObjectMapper objectMapper;
 
   /**
    * 上传单个文件。前端按文件并发发起请求，每个请求一个独立事务，
@@ -90,14 +96,27 @@ public class GalleryController {
   }
 
   /**
-   * 用新文件替换已有资源的文件。新文件的类型必须与当前资源一致，
-   * 换类型请删除后重新上传。旧的 OSS 对象在数据库更新成功后清理。
+   * 编辑弹窗的保存：整组提交媒体列表与元数据，一次请求一个事务。
+   *
+   * 取代了原来的 {@code PATCH /{id}}（只改元数据）与 {@code POST /{id}/replace}（只换文件）。
+   * 那两个入口留着会长出第二条写路径，而这条路上任何一处漏掉封面同步
+   *（gallery.src / type 与类型表）都不会报错，只是页面上某张图点不开。
+   *
+   * @param payloadJson {@link GalleryMediaCommitDTO} 的 JSON；items 是有序的最终媒体列表
+   * @param files       本次新传的文件，items 里的 newFile 是它在这个数组里的下标；可以缺省
    */
-  @PostMapping("/{id}/replace")
-  public Result<UploadResultVO> replaceFile(
+  @PutMapping(value = "/{id}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+  public Result<GalleryItemVO> commitMedia(
       @PathVariable Long id,
-      @RequestParam("file") MultipartFile file) {
-    return uploadService.replaceFile(id, file, currentUser());
+      @RequestParam("payload") String payloadJson,
+      @RequestParam(value = "files", required = false) MultipartFile[] files) {
+    GalleryMediaCommitDTO payload;
+    try {
+      payload = objectMapper.readValue(payloadJson, GalleryMediaCommitDTO.class);
+    } catch (JsonProcessingException e) {
+      return Result.error(400, "请求格式无效");
+    }
+    return mediaCommitService.commit(id, payload, files, currentUser());
   }
 
   /** 前端据此提示大小上限，值与后端校验读的是同一份配置 */
@@ -159,19 +178,6 @@ public class GalleryController {
   @GetMapping("/isLiked/{id}")
   public Result<Boolean> isGalleryLiked(@PathVariable Long id) {
     return queryService.isLiked(id, currentUser());
-  }
-
-  /**
-   * 只接受 title / description / alt / tags / category / bgmSrc / bgmType，
-   * 其余字段由服务端忽略。
-   *
-   * bgmSrc 与 bgmType 必须同时出现：只给一边返回 400；两个都给 null 表示清空 BGM。
-   */
-  @PatchMapping("/{id}")
-  public Result<GalleryMetadataVO> updateGallery(
-      @PathVariable Long id,
-      @RequestBody Map<String, Object> body) {
-    return manageService.updateMetadata(id, body, currentUser());
   }
 
   @DeleteMapping("/{id}")

@@ -15,7 +15,7 @@ import lombok.RequiredArgsConstructor;
 /**
  * 背景音乐的取值校验 —— 全仓库唯一一处。
  *
- * 两个写入入口（编辑接口 PATCH /gallery/{id}、随图上传 POST /gallery/upload）共用它。
+ * 两个写入入口（编辑作品的 PUT /gallery/{id}、随图上传 POST /gallery/upload）共用它。
  * 分成两份实现的话，两边迟早会漂移，而漂移的后果是**半挡状态**：
  * 一条路径挡住了、另一条没有，看着像有校验，其实可以从没挡住的那条绕进来。
  *

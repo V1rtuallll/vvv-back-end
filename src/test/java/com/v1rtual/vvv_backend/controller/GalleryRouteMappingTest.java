@@ -10,6 +10,7 @@ import java.lang.reflect.Parameter;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.multipart.MultipartFile;
@@ -73,5 +74,22 @@ class GalleryRouteMappingTest {
         .getMethod("appendMedia", Long.class, MultipartFile.class, String.class)
         .getAnnotation(PostMapping.class);
     assertEquals("/{id}/media", mapping.value()[0]);
+  }
+
+  /**
+   * 编辑弹窗的保存是 PUT /api/gallery/{id}：整组媒体列表与元数据一次交上去。
+   *
+   * 取代了原来的 {@code PATCH /{id}} 与 {@code POST /{id}/replace} ——
+   * 那两个入口各自只改一半，留着就会长出第二条写路径。
+   */
+  @Test
+  void committingTheWholeMediaListIsAPutOnTheItem() throws Exception {
+    PutMapping mapping = GalleryController.class
+        .getMethod("commitMedia", Long.class, String.class, MultipartFile[].class)
+        .getAnnotation(PutMapping.class);
+
+    assertNotNull(mapping, "整组提交应当是 PUT 端点");
+    assertEquals(1, mapping.value().length);
+    assertEquals("/{id}", mapping.value()[0]);
   }
 }

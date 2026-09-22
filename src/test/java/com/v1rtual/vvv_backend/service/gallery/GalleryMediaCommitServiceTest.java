@@ -1,0 +1,503 @@
+package com.v1rtual.vvv_backend.service.gallery;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import java.io.IOException;
+import java.util.List;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.boot.autoconfigure.web.servlet.MultipartProperties;
+import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.web.multipart.MultipartFile;
+
+import com.v1rtual.vvv_backend.dto.GalleryMediaCommitDTO;
+import com.v1rtual.vvv_backend.entity.Gallery;
+import com.v1rtual.vvv_backend.entity.GalleryMedia;
+import com.v1rtual.vvv_backend.entity.Photo;
+import com.v1rtual.vvv_backend.entity.ResourceType;
+import com.v1rtual.vvv_backend.entity.User;
+import com.v1rtual.vvv_backend.mapper.GalleryMapper;
+import com.v1rtual.vvv_backend.mapper.GalleryMediaMapper;
+import com.v1rtual.vvv_backend.mapper.GifMapper;
+import com.v1rtual.vvv_backend.mapper.MusicMapper;
+import com.v1rtual.vvv_backend.mapper.PhotoMapper;
+import com.v1rtual.vvv_backend.mapper.VideoMapper;
+import com.v1rtual.vvv_backend.security.OwnerAccess;
+import com.v1rtual.vvv_backend.service.media.OssCleanupRecordService;
+import com.v1rtual.vvv_backend.service.media.TypedMediaStore;
+import com.v1rtual.vvv_backend.service.media.UploadValidator;
+import com.v1rtual.vvv_backend.util.OssUtil;
+import com.v1rtual.vvv_backend.vo.GalleryItemVO;
+import com.v1rtual.vvv_backend.vo.Result;
+
+class GalleryMediaCommitServiceTest {
+
+  private static final Long GALLERY_ID = 7L;
+  private static final String COVER_SRC = "https://example.test/imgs/a.png";
+  private static final String SECOND_SRC = "https://example.test/imgs/b.png";
+  private static final String THIRD_SRC = "https://example.test/imgs/c.png";
+  private static final String UPLOADED_SRC = "https://example.test/imgs/new.png";
+  private static final String SONG = "https://example.test/music/a.mp3";
+
+  private final OssUtil ossUtil = mock(OssUtil.class);
+  private final GalleryMapper galleryMapper = mock(GalleryMapper.class);
+  private final GalleryMediaMapper galleryMediaMapper = mock(GalleryMediaMapper.class);
+  private final PhotoMapper photoMapper = mock(PhotoMapper.class);
+  private final GifMapper gifMapper = mock(GifMapper.class);
+  private final VideoMapper videoMapper = mock(VideoMapper.class);
+  private final MusicMapper musicMapper = mock(MusicMapper.class);
+  /**
+   * 真的分派器包四个 mock mapper，写法与 GalleryUploadServiceTest 一致。
+   *
+   * 整组提交这条路会走到真实的封面同步，它要往类型表写一行 —— 分派器整个 mock 掉的话，
+   * 那些断言就只剩「转发了一次」，证明不了「转给了 photo 表而不是 gif 表」。
+   */
+  private final TypedMediaStore typedMediaStore =
+      new TypedMediaStore(photoMapper, gifMapper, videoMapper, musicMapper);
+  /**
+   * 真的媒体服务包同一个 mapper 桩。
+   *
+   * 整组重写是这张表最复杂的一次写，它必须走 GalleryMediaService（媒体表的唯一写入口），
+   * 于是「删了哪几行、重排成什么样、插了哪一行」这些断言仍然落在 mapper 上；
+   * 换成 mock(GalleryMediaService.class) 就只证明了「转发过一次」。
+   */
+  private final GalleryMediaService galleryMediaService =
+      new GalleryMediaService(galleryMediaMapper, galleryMapper, typedMediaStore);
+  private final GalleryQueryService galleryQueryService = mock(GalleryQueryService.class);
+  private final OssCleanupRecordService cleanupRecordService = mock(OssCleanupRecordService.class);
+  private final MultipartProperties multipartProperties = new MultipartProperties();
+  private final OwnerAccess ownerAccess = mock(OwnerAccess.class);
+
+  /**
+   * 默认桩：不配 BGM，即 {@code Bgm(null, null)}。
+   *
+   * 「两个都没传 = 清空」只有 resolver 规则 1 一处定义，服务里不自己判 ——
+   * 所以不带 BGM 的用例也得有个默认答复，否则拿到的是未桩的 null。
+   */
+  private final GalleryBgmResolver bgmResolver = noBgmByDefaultResolver();
+
+  /** 用真的守卫包同一个 galleryMapper 桩：护栏会查到桩上，用例不必再 mock 一层。 */
+  private final GalleryBgmUsageGuard bgmUsageGuard = new GalleryBgmUsageGuard(galleryMapper);
+
+  private static GalleryBgmResolver noBgmByDefaultResolver() {
+    GalleryBgmResolver resolver = mock(GalleryBgmResolver.class);
+    when(resolver.resolve(any(), any(), any())).thenReturn(new GalleryBgmResolver.Bgm(null, null));
+    return resolver;
+  }
+
+  private GalleryMediaCommitService service() {
+    return new GalleryMediaCommitService(galleryMapper, galleryMediaService, galleryQueryService,
+        new UploadValidator(multipartProperties), ossUtil, cleanupRecordService, ownerAccess,
+        bgmResolver, bgmUsageGuard);
+  }
+
+  private static Gallery gallery(Long ownerId) {
+    return Gallery.builder().id(GALLERY_ID).type(ResourceType.photo).title("旧标题")
+        .description("旧描述").src(COVER_SRC).userId(ownerId).uploaderUsername("作者").build();
+  }
+
+  private static GalleryMedia media(long id, String src, int order) {
+    return GalleryMedia.builder().id(id).galleryId(GALLERY_ID).src(src)
+        .type(ResourceType.photo).sortOrder(order).build();
+  }
+
+  private static GalleryMediaCommitDTO payload(GalleryMediaCommitDTO.Item... items) {
+    return payload("新标题", "新描述", null, null, items);
+  }
+
+  private static GalleryMediaCommitDTO payload(String title, String description, String bgmSrc,
+      String bgmType, GalleryMediaCommitDTO.Item... items) {
+    GalleryMediaCommitDTO payload = new GalleryMediaCommitDTO();
+    payload.setTitle(title);
+    payload.setDescription(description);
+    payload.setBgmSrc(bgmSrc);
+    payload.setBgmType(bgmType);
+    payload.setItems(List.of(items));
+    return payload;
+  }
+
+  private static GalleryMediaCommitDTO.Item keep(Long mediaId) {
+    GalleryMediaCommitDTO.Item item = new GalleryMediaCommitDTO.Item();
+    item.setMediaId(mediaId);
+    return item;
+  }
+
+  private static GalleryMediaCommitDTO.Item fresh(int fileIndex) {
+    GalleryMediaCommitDTO.Item item = new GalleryMediaCommitDTO.Item();
+    item.setNewFile(fileIndex);
+    return item;
+  }
+
+  private static MockMultipartFile png() {
+    return new MockMultipartFile("files", "photo.png", "image/png",
+        new byte[] {(byte) 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A});
+  }
+
+  private static MockMultipartFile mp3() {
+    // ID3 头：UploadValidator 的魔数校验认它
+    return new MockMultipartFile("files", "song.mp3", "audio/mpeg",
+        new byte[] {'I', 'D', '3', 0x03, 0x00, 0x00, 0x00});
+  }
+
+  private static User member() {
+    return user(1L, "member");
+  }
+
+  private static User user(Long id, String name) {
+    User user = new User();
+    user.setId(id);
+    user.setUsername(name);
+    return user;
+  }
+
+  /**
+   * 打开一个事务同步，模拟 Spring 在 @Transactional 方法外层提供的东西。
+   *
+   * 方法体返回之后才提交，所以「删被移除媒体的 OSS 对象」挂在提交点的回调上；
+   * 单元测试里没有事务代理，registerSynchronization 会因为没有活动同步而抛，
+   * 这个环境要自己搭 —— 不搭的话红的是测试，不是实现。
+   */
+  private void beginTransaction() {
+    TransactionSynchronizationManager.initSynchronization();
+  }
+
+  /** 走到提交点：真实事务提交时 Spring 会做同一件事。 */
+  private void commitTransaction() {
+    TransactionSynchronizationManager.getSynchronizations()
+        .forEach(TransactionSynchronization::afterCommit);
+  }
+
+  @AfterEach
+  void clearTransactionSynchronization() {
+    // 没搭过事务同步的用例不走这一步：clearSynchronization 在没有活动同步时会抛
+    if (TransactionSynchronizationManager.isSynchronizationActive()) {
+      TransactionSynchronizationManager.clearSynchronization();
+    }
+  }
+
+  /** 一次成功的提交：库里三行、最终列表里两行加一个新文件，第一条最终被移除。 */
+  private void stubAWorkingCommit() throws Exception {
+    when(galleryMapper.selectById(GALLERY_ID)).thenReturn(gallery(1L));
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    when(galleryMediaMapper.selectByGalleryId(GALLERY_ID)).thenReturn(List.of(
+        media(11L, COVER_SRC, 0), media(12L, SECOND_SRC, 1), media(13L, THIRD_SRC, 2)));
+    when(ossUtil.upload(any(), any())).thenReturn(UPLOADED_SRC);
+    when(galleryMediaMapper.insert(any())).thenReturn(1);
+    when(galleryMapper.updateMetadata(any())).thenReturn(1);
+    when(galleryQueryService.item(GALLERY_ID, null))
+        .thenReturn(Result.success(GalleryItemVO.builder().id(GALLERY_ID).build()));
+  }
+
+  @Test
+  void rejectsAnonymousWritesBeforeTouchingAnything() throws Exception {
+    Result<GalleryItemVO> result =
+        service().commit(GALLERY_ID, payload(keep(11L)), new MultipartFile[] {png()}, null);
+
+    assertEquals(401, result.getCode());
+    verify(galleryMapper, never()).selectById(any());
+    verify(ossUtil, never()).upload(any(), any());
+  }
+
+  @Test
+  void reportsMissingResources() throws Exception {
+    when(galleryMapper.selectById(404L)).thenReturn(null);
+
+    assertEquals(404, service().commit(404L, payload(keep(11L)), null, member()).getCode());
+  }
+
+  @Test
+  void rejectsOutsidersBeforeTouchingTheStorage() throws Exception {
+    when(galleryMapper.selectById(GALLERY_ID)).thenReturn(gallery(100L));
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+
+    Result<GalleryItemVO> result =
+        service().commit(GALLERY_ID, payload(keep(11L)), new MultipartFile[] {png()}, user(200L, "路人"));
+
+    assertEquals(403, result.getCode());
+    assertEquals(OwnerAccess.DENIED_MESSAGE, result.getMsg());
+    verify(ossUtil, never()).upload(any(), any());
+  }
+
+  /** I4：作品至少有一个媒体。空列表会让作品在库里变成一条什么都点不开的行 */
+  @Test
+  void rejectsARequestThatWouldLeaveTheWorkWithoutAnyMedia() throws Exception {
+    when(galleryMapper.selectById(GALLERY_ID)).thenReturn(gallery(1L));
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+
+    assertEquals(400, service().commit(GALLERY_ID, payload(), null, member()).getCode());
+    assertEquals(400, service().commit(GALLERY_ID, new GalleryMediaCommitDTO(), null, member()).getCode());
+
+    verify(galleryMediaMapper, never()).deleteById(any());
+    verify(galleryMapper, never()).updateMetadata(any());
+    verify(ossUtil, never()).upload(any(), any());
+  }
+
+  @Test
+  void rejectsAnItemThatDoesNotSayExactlyOneWayOfKeepingOrAddingAMedia() throws Exception {
+    when(galleryMapper.selectById(GALLERY_ID)).thenReturn(gallery(1L));
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    when(galleryMediaMapper.selectByGalleryId(GALLERY_ID))
+        .thenReturn(List.of(media(11L, COVER_SRC, 0)));
+
+    GalleryMediaCommitDTO.Item both = new GalleryMediaCommitDTO.Item();
+    both.setMediaId(11L);
+    both.setNewFile(0);
+    GalleryMediaCommitDTO.Item neither = new GalleryMediaCommitDTO.Item();
+
+    assertEquals(400,
+        service().commit(GALLERY_ID, payload(both), new MultipartFile[] {png()}, member()).getCode());
+    assertEquals(400,
+        service().commit(GALLERY_ID, payload(neither), new MultipartFile[] {png()}, member()).getCode());
+
+    verify(ossUtil, never()).upload(any(), any());
+    verify(galleryMediaMapper, never()).deleteById(any());
+  }
+
+  @Test
+  void rejectsAMediaThatBelongsToAnotherWork() throws Exception {
+    when(galleryMapper.selectById(GALLERY_ID)).thenReturn(gallery(1L));
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    when(galleryMediaMapper.selectByGalleryId(GALLERY_ID))
+        .thenReturn(List.of(media(11L, COVER_SRC, 0)));
+
+    Result<GalleryItemVO> result =
+        service().commit(GALLERY_ID, payload(keep(99L)), new MultipartFile[] {png()}, member());
+
+    assertEquals(400, result.getCode());
+    assertTrue(result.getMsg().contains("99"), "要说清是哪一个媒体，实际是：" + result.getMsg());
+    verify(ossUtil, never()).upload(any(), any());
+    verify(galleryMediaMapper, never()).deleteById(any());
+  }
+
+  @Test
+  void rejectsANewFileIndexThatIsOutsideTheRequestOrReused() throws Exception {
+    when(galleryMapper.selectById(GALLERY_ID)).thenReturn(gallery(1L));
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    when(galleryMediaMapper.selectByGalleryId(GALLERY_ID))
+        .thenReturn(List.of(media(11L, COVER_SRC, 0)));
+
+    assertEquals(400, service().commit(GALLERY_ID, payload(fresh(2)),
+        new MultipartFile[] {png()}, member()).getCode());
+    assertEquals(400, service().commit(GALLERY_ID, payload(fresh(-1)),
+        new MultipartFile[] {png()}, member()).getCode());
+    // 同一个文件被引用两次：多插一行指向同一个 OSS 对象，删掉其中一个就把另一个弄成死链
+    assertEquals(400, service().commit(GALLERY_ID, payload(fresh(0), fresh(0)),
+        new MultipartFile[] {png()}, member()).getCode());
+
+    verify(ossUtil, never()).upload(any(), any());
+    verify(galleryMediaMapper, never()).deleteById(any());
+  }
+
+  @Test
+  void rejectsANewFileFromADifferentFamilyBeforeTouchingTheStorage() throws Exception {
+    when(galleryMapper.selectById(GALLERY_ID)).thenReturn(gallery(1L));
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    when(galleryMediaMapper.selectByGalleryId(GALLERY_ID))
+        .thenReturn(List.of(media(11L, COVER_SRC, 0)));
+
+    Result<GalleryItemVO> result = service().commit(GALLERY_ID, payload(keep(11L), fresh(0)),
+        new MultipartFile[] {mp3()}, member());
+
+    assertEquals(400, result.getCode());
+    assertEquals("同一个作品的媒体类型必须一致，不能混用", result.getMsg());
+    verify(ossUtil, never()).upload(any(), any());
+    verify(galleryMediaMapper, never()).deleteById(any());
+  }
+
+  /**
+   * BGM 不合法时不许白传一次文件。
+   *
+   * 传上去再删等于多花一次上传、多一次清理，而清理本身也可能失败 ——
+   * 失败会留下一个没有登记行的孤儿对象，永远没人清理。
+   */
+  @Test
+  void anInvalidBackgroundMusicIsRejectedBeforeAnythingIsUploaded() throws Exception {
+    when(galleryMapper.selectById(GALLERY_ID)).thenReturn(gallery(1L));
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    when(galleryMediaMapper.selectByGalleryId(GALLERY_ID))
+        .thenReturn(List.of(media(11L, COVER_SRC, 0)));
+    when(bgmResolver.resolve(any(), any(), any()))
+        .thenThrow(new IllegalArgumentException("背景音乐必须是本站上传的音频或视频"));
+
+    Result<GalleryItemVO> result = service().commit(GALLERY_ID,
+        payload("新标题", "新描述", "https://evil.test/a.mp3", "audio", keep(11L), fresh(0)),
+        new MultipartFile[] {png()}, member());
+
+    assertEquals(400, result.getCode());
+    assertEquals("背景音乐必须是本站上传的音频或视频", result.getMsg());
+    verify(ossUtil, never()).upload(any(), any());
+    verify(galleryMediaMapper, never()).deleteById(any());
+    // 一次请求要么整体成功、要么什么都没改
+    verify(galleryMapper, never()).updateMetadata(any());
+  }
+
+  /**
+   * 写入用的是校验器返回的值，不是请求体里的原文。
+   *
+   * 差一个空格，存进库的地址就与登记表里那一串对不上，前端按地址取曲子会永远落空 ——
+   * 而页面不报错，只是没声音。第三个参数是**这条项的类型**：整组同族，所以传族名。
+   */
+  @Test
+  void storesTheBackgroundMusicTheResolverApproved() throws Exception {
+    beginTransaction();
+    stubAWorkingCommit();
+    // 最终列表保持原顺序：封面没换人，封面同步因此什么都不做
+    when(galleryMediaMapper.selectCover(GALLERY_ID))
+        .thenReturn(media(11L, COVER_SRC, 0));
+    when(bgmResolver.resolve("  " + SONG + "  ", "audio", ResourceType.photo))
+        .thenReturn(new GalleryBgmResolver.Bgm(SONG, "audio"));
+
+    Result<GalleryItemVO> result = service().commit(GALLERY_ID,
+        payload("新标题", "新描述", "  " + SONG + "  ", "audio", keep(11L), keep(12L)),
+        null, member());
+
+    assertEquals(200, result.getCode());
+    ArgumentCaptor<Gallery> stored = ArgumentCaptor.forClass(Gallery.class);
+    verify(galleryMapper).updateMetadata(stored.capture());
+    assertEquals(SONG, stored.getValue().getBgmSrc());
+    assertEquals("audio", stored.getValue().getBgmType());
+  }
+
+  /**
+   * 封面要被移除时必须先问护栏，且拒绝时**什么都没发生**。
+   *
+   * 删掉之后那些配了它的图会静默静音：页面不报错，就是没声音，也没有任何地方记一笔。
+   * 下面的桩把「一次成功的提交」整条路都铺通（桩不计入调用次数，never 断言不受影响），
+   * 这样护栏一旦被挪到删除之后，红的会是「什么都没发生」那几条断言，
+   * 而不是半路撞上一个没桩的 mock。
+   */
+  @Test
+  void refusesToDropTheCoverWhenItsObjectIsUsedAsBackgroundMusic() throws Exception {
+    stubAWorkingCommit();
+    when(galleryMapper.countByBgmSrc(COVER_SRC)).thenReturn(2L);
+    when(galleryMediaMapper.selectCover(GALLERY_ID)).thenReturn(media(12L, SECOND_SRC, 0));
+
+    Result<GalleryItemVO> result = service().commit(GALLERY_ID, payload(keep(12L), fresh(0)),
+        new MultipartFile[] {png()}, member());
+
+    assertEquals(409, result.getCode());
+    assertTrue(result.getMsg().contains("2"), "拒绝理由要说清被几张图占用，实际是：" + result.getMsg());
+    verify(ossUtil, never()).upload(any(), any());
+    verify(galleryMediaMapper, never()).deleteById(any());
+    verify(galleryMapper, never()).updateMetadata(any());
+    verify(ossUtil, never()).deleteByPublicUrl(anyString());
+  }
+
+  @Test
+  void dropsTheNewCoverCandidateGuardWhenTheCoverStays() throws Exception {
+    beginTransaction();
+    stubAWorkingCommit();
+    when(galleryMapper.countByBgmSrc(any())).thenReturn(5L);
+    when(galleryMediaMapper.selectCover(GALLERY_ID)).thenReturn(media(11L, COVER_SRC, 0));
+
+    Result<GalleryItemVO> result =
+        service().commit(GALLERY_ID, payload(keep(11L), keep(12L)), null, member());
+
+    assertEquals(200, result.getCode());
+    // 封面还在这个列表里就不会被删，护栏问都不该问：这条地址仍然有人用
+    verify(galleryMapper, never()).countByBgmSrc(anyString());
+  }
+
+  @Test
+  void commitsTheWholeListAndTheMetadataInOneTransaction() throws Exception {
+    beginTransaction();
+    stubAWorkingCommit();
+    // 新文件排到 0 号，封面因此换人：类型表要让位、gallery 行要跟上
+    when(galleryMediaMapper.selectCover(GALLERY_ID)).thenReturn(media(14L, UPLOADED_SRC, 0));
+    when(photoMapper.insert(any())).thenReturn(1);
+    when(galleryMapper.updateSrcAndType(GALLERY_ID, UPLOADED_SRC, ResourceType.photo)).thenReturn(1);
+
+    Result<GalleryItemVO> result = service().commit(GALLERY_ID,
+        payload(fresh(0), keep(12L), keep(11L)), new MultipartFile[] {png()}, member());
+
+    assertEquals(200, result.getCode());
+    assertEquals(GALLERY_ID, result.getData().getId());
+
+    // 不在最终列表里的那一条被删掉，保留的两条一条都不许删
+    verify(galleryMediaMapper).deleteById(13L);
+    verify(galleryMediaMapper, never()).deleteById(11L);
+    verify(galleryMediaMapper, never()).deleteById(12L);
+
+    // 新行按下标插在 0 号，保留的两条按下标重排
+    ArgumentCaptor<GalleryMedia> inserted = ArgumentCaptor.forClass(GalleryMedia.class);
+    verify(galleryMediaMapper).insert(inserted.capture());
+    assertEquals(GALLERY_ID, inserted.getValue().getGalleryId());
+    assertEquals(UPLOADED_SRC, inserted.getValue().getSrc());
+    assertEquals(ResourceType.photo, inserted.getValue().getType());
+    assertEquals(0, inserted.getValue().getSortOrder());
+    assertNull(inserted.getValue().getClientMediaId(), "整组提交不填幂等键");
+    verify(galleryMediaMapper).updateSortOrder(12L, 1);
+    verify(galleryMediaMapper).updateSortOrder(11L, 2);
+
+    ArgumentCaptor<Gallery> updated = ArgumentCaptor.forClass(Gallery.class);
+    verify(galleryMapper).updateMetadata(updated.capture());
+    assertEquals("新标题", updated.getValue().getTitle());
+    assertEquals("新描述", updated.getValue().getDescription());
+
+    // 封面同步发生在元数据之后：类型表里那一行带的是新标题，不是旧的
+    ArgumentCaptor<Photo> typedRow = ArgumentCaptor.forClass(Photo.class);
+    verify(photoMapper).insert(typedRow.capture());
+    assertEquals("新标题", typedRow.getValue().getTitle());
+    assertEquals(UPLOADED_SRC, typedRow.getValue().getSrc());
+    verify(photoMapper).deleteBySrc(COVER_SRC);
+    assertEquals(UPLOADED_SRC, updated.getValue().getSrc(), "封面同步要把实体上的 src 也改过来");
+
+    // 被移除媒体的 OSS 对象在提交点之前一个字节都不许动：这一刻数据库还可能回滚
+    verify(ossUtil, never()).deleteByPublicUrl(THIRD_SRC);
+    commitTransaction();
+    verify(ossUtil).deleteByPublicUrl(THIRD_SRC);
+    // 还在列表里的对象不能删，它们仍然被引用着
+    verify(ossUtil, never()).deleteByPublicUrl(COVER_SRC);
+    verify(ossUtil, never()).deleteByPublicUrl(SECOND_SRC);
+    verify(cleanupRecordService, never()).recordFailure(anyString(), anyString());
+  }
+
+  /**
+   * 事务中途失败：数据库会回滚，刚传上去的对象不会 —— 必须显式清掉。
+   *
+   * 被移除媒体的对象反过来一个都不许动：回滚之后那些行还在，对象还得有人用。
+   */
+  @Test
+  void cleansUpTheUploadedObjectsWhenTheCommitFails() throws Exception {
+    beginTransaction();
+    stubAWorkingCommit();
+    when(galleryMapper.updateMetadata(any())).thenReturn(0);
+
+    Result<GalleryItemVO> result = service().commit(GALLERY_ID, payload(fresh(0), keep(11L)),
+        new MultipartFile[] {png()}, member());
+
+    assertEquals(500, result.getCode());
+    verify(ossUtil).deleteByPublicUrl(UPLOADED_SRC);
+    verify(ossUtil, never()).deleteByPublicUrl(THIRD_SRC);
+    verify(galleryQueryService, never()).item(any(), any());
+  }
+
+  /** OSS 上传本身失败时数据库还没被碰过，只需要清掉这次已经传上去的那一份 */
+  @Test
+  void cleansUpTheFileUploadedBeforeTheFailingOne() throws Exception {
+    stubAWorkingCommit();
+    when(ossUtil.upload(any(), any())).thenReturn(UPLOADED_SRC)
+        .thenThrow(new IOException("oss down"));
+
+    Result<GalleryItemVO> result = service().commit(GALLERY_ID, payload(fresh(0), fresh(1)),
+        new MultipartFile[] {png(), png()}, member());
+
+    assertEquals(500, result.getCode());
+    assertEquals("上传文件失败", result.getMsg());
+    verify(ossUtil).deleteByPublicUrl(UPLOADED_SRC);
+    verify(galleryMediaMapper, never()).deleteById(any());
+    verify(galleryMapper, never()).updateMetadata(any());
+  }
+}

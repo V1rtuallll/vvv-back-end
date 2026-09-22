@@ -1,0 +1,287 @@
+package com.v1rtual.vvv_backend.service.gallery;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import org.apache.commons.lang3.StringUtils;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.interceptor.TransactionAspectSupport;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.web.multipart.MultipartFile;
+
+import com.v1rtual.vvv_backend.dto.GalleryMediaCommitDTO;
+import com.v1rtual.vvv_backend.entity.Gallery;
+import com.v1rtual.vvv_backend.entity.GalleryMedia;
+import com.v1rtual.vvv_backend.entity.ResourceType;
+import com.v1rtual.vvv_backend.entity.User;
+import com.v1rtual.vvv_backend.mapper.GalleryMapper;
+import com.v1rtual.vvv_backend.security.OwnerAccess;
+import com.v1rtual.vvv_backend.service.media.MediaTypeDirectory;
+import com.v1rtual.vvv_backend.service.media.OssCleanupRecordService;
+import com.v1rtual.vvv_backend.service.media.UploadValidator;
+import com.v1rtual.vvv_backend.util.OssUtil;
+import com.v1rtual.vvv_backend.vo.GalleryItemVO;
+import com.v1rtual.vvv_backend.vo.Result;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+/**
+ * 编辑弹窗的保存：把一条作品的媒体列表**整组**换掉，连同元数据一起。
+ *
+ * 一次请求、一个事务。这是编辑与新建最大的不同 —— 新建时部分成功只是「少传了几张」，
+ * 而编辑里有删除：删了一部分、新文件又没传成，作品就永久缺了几张，
+ * 用户看到的是一份不完整的列表，而哪几张没了没有任何地方记着。
+ *
+ * **OSS 删除不在事务里。** 桶是外部服务，数据库回滚带不动它。顺序固定为
+ * 「先传新文件 → 一个事务改库 → 提交后删被移除的对象」，删不掉就落可重试记录、
+ * 不让这次保存失败。事务失败时反过来清掉本次刚传上去的对象。
+ *
+ * 媒体表的写一律交给 {@link GalleryMediaService}（那张表的唯一写入口，I1/I2 由它维护）：
+ * 这条路径要动删除、重排与封面三处，任何一处漏掉同步都是静默故障。
+ */
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class GalleryMediaCommitService {
+
+  private static final String OSS_CLEANUP_REASON = "编辑作品时 OSS 对象清理失败";
+
+  private final GalleryMapper galleryMapper;
+  private final GalleryMediaService galleryMediaService;
+  private final GalleryQueryService galleryQueryService;
+  private final UploadValidator uploadValidator;
+  private final OssUtil ossUtil;
+  private final OssCleanupRecordService ossCleanupRecordService;
+  private final OwnerAccess ownerAccess;
+  private final GalleryBgmResolver bgmResolver;
+  private final GalleryBgmUsageGuard bgmUsageGuard;
+
+  /**
+   * @param payload 全量语义的最终值：items 是有序的最终媒体列表
+   * @param files   本次新传的文件，items 里的 newFile 是它的下标；可以缺省
+   */
+  @Transactional
+  public Result<GalleryItemVO> commit(Long id, GalleryMediaCommitDTO payload, MultipartFile[] files,
+      User user) {
+    // 1) 前置校验。全部在动手之前：任何一条不通过时，桶里与库里都还没有改动
+    if (user == null) return Result.error(401, "未登录或登录已过期");
+    if (id == null || id <= 0) return Result.error(400, "资源ID无效");
+    if (payload == null || payload.getItems() == null || payload.getItems().isEmpty()) {
+      return Result.error(400, "作品至少要保留一个媒体");
+    }
+
+    Gallery gallery = galleryMapper.selectById(id);
+    if (gallery == null) return Result.error(404, "资源不存在");
+    if (!canManage(gallery.getUserId(), user)) return Result.error(403, OwnerAccess.DENIED_MESSAGE);
+
+    MultipartFile[] incoming = files == null ? new MultipartFile[0] : files;
+    List<GalleryMedia> existing = galleryMediaService.listOf(id);
+    Map<Long, GalleryMedia> byId = new LinkedHashMap<>();
+    existing.forEach(media -> byId.put(media.getId(), media));
+
+    List<GalleryMediaCommitDTO.Item> items = payload.getItems();
+    Set<Integer> newIndexes = new HashSet<>();
+    for (GalleryMediaCommitDTO.Item item : items) {
+      boolean hasId = item.getMediaId() != null;
+      boolean hasFile = item.getNewFile() != null;
+      if (hasId == hasFile) {
+        return Result.error(400, "每一项必须且只能给出 mediaId 或 newFile 其中之一");
+      }
+      if (hasId && !byId.containsKey(item.getMediaId())) {
+        return Result.error(400, "媒体 " + item.getMediaId() + " 不属于这个作品");
+      }
+      if (hasFile) {
+        int index = item.getNewFile();
+        if (index < 0 || index >= incoming.length) {
+          return Result.error(400, "newFile 下标越界");
+        }
+        if (!newIndexes.add(index)) {
+          // 同一个文件被引用两次会插出两行指向同一个 OSS 对象，删掉其中一行就把另一行变成死链
+          return Result.error(400, "同一个文件被引用了两次");
+        }
+      }
+    }
+
+    // 2) 新文件的类型先定下来：族一致靠它，传 OSS 的目录也靠它。
+    //    没被 items 引用的文件一律忽略 —— 它们不会产生任何 OSS 对象
+    Map<Integer, ResourceType> resolvedTypes = new LinkedHashMap<>();
+    for (Integer index : newIndexes) {
+      try {
+        resolvedTypes.put(index, uploadValidator.validateAndResolveMedia(incoming[index]));
+      } catch (IllegalArgumentException e) {
+        return Result.error(400, e.getMessage());
+      }
+    }
+
+    // 3) 整组必须同族（I3）。保留的旧媒体与新文件合在一起判：只判新文件的话，
+    //    「原有的图 + 新传的视频」这种混搭会一路通过，详情弹窗在静图与播放器之间跳
+    ResourceType family = null;
+    for (GalleryMediaCommitDTO.Item item : items) {
+      ResourceType type = item.getMediaId() != null
+          ? byId.get(item.getMediaId()).getType()
+          : resolvedTypes.get(item.getNewFile());
+      if (family == null) family = type;
+      else if (!GalleryMediaService.sameFamily(family, type)) {
+        return Result.error(400, "同一个作品的媒体类型必须一致，不能混用");
+      }
+    }
+    // 整组都没有类型（回填之前的历史行）时推不出族，也就判不了 BGM 能不能配
+    if (family == null) return Result.error(400, "作品的媒体类型缺失，无法保存");
+
+    // 4) BGM 一律交给 resolver 判，这里不看「传没传」：只发一边会被它的规则 1 拒掉，
+    //    两边都不发就是清空 —— 与编辑接口原来的口径一致。
+    //    位置在传文件之前：反过来的话 BGM 不合法时文件已经上去了，还得再删一次，
+    //    而那次清理本身也可能失败（会留下一个没有登记行的孤儿对象）
+    GalleryBgmResolver.Bgm bgm;
+    try {
+      bgm = bgmResolver.resolve(payload.getBgmSrc(), payload.getBgmType(), family);
+    } catch (IllegalArgumentException e) {
+      return Result.error(400, e.getMessage());
+    }
+
+    // 5) 封面将被移除时先过 BGM 护栏。位置在删除与删 OSS **之前**：删掉之后那些配了它的图
+    //    会静默静音 —— 页面不报错、也没人记一笔。判据与删除路径共用同一个守卫，逻辑只有一份。
+    //    existing 由 listOf 按 sort_order 升序取出，第一条就是封面（I1）
+    GalleryMedia cover = existing.isEmpty() ? null : existing.get(0);
+    boolean coverDropped = cover != null
+        && items.stream().noneMatch(item -> cover.getId().equals(item.getMediaId()));
+    if (coverDropped) {
+      Result<GalleryItemVO> blocked = bgmUsageGuard.blockIfUsedAsBgm(gallery.getSrc());
+      if (blocked != null) return blocked;
+    }
+
+    // 6) 先传新文件，再在一个事务里改库
+    Map<Integer, String> uploadedUrls = new LinkedHashMap<>();
+    List<String> uploadedForRollback = new ArrayList<>();
+    try {
+      for (Integer index : newIndexes) {
+        MultipartFile file = incoming[index];
+        String url = ossUtil.upload(file, MediaTypeDirectory.directoryFor(resolvedTypes.get(index)));
+        if (StringUtils.isBlank(url)) throw new IllegalStateException("OSS 未返回可访问地址");
+        uploadedUrls.put(index, url);
+        uploadedForRollback.add(url);
+      }
+
+      // 整组重写：删掉不在最终列表里的行、按最终列表的下标重排、缺的插进去。
+      // 覆盖不了的东西不必带 —— 带 id 的那几行只用来认「保留哪一条」
+      List<GalleryMedia> finalOrder = new ArrayList<>();
+      for (GalleryMediaCommitDTO.Item item : items) {
+        finalOrder.add(item.getMediaId() != null
+            ? GalleryMedia.builder().id(item.getMediaId()).build()
+            : GalleryMedia.builder()
+                .src(uploadedUrls.get(item.getNewFile()))
+                .type(resolvedTypes.get(item.getNewFile()))
+                .build());
+      }
+      List<GalleryMedia> removed = galleryMediaService.replaceAllOf(id, finalOrder);
+
+      // 元数据（全量写）。title / description 这次就是最终值，不区分「改没改」；
+      // 其余列（alt / tags / category / duration）由实体上原样的值写回 ——
+      // 实体是 selectById 读出来的，没参与的列不会被抹掉
+      gallery.setTitle(payload.getTitle());
+      gallery.setDescription(payload.getDescription());
+      gallery.setBgmSrc(bgm.src());
+      gallery.setBgmType(bgm.type());
+      if (galleryMapper.updateMetadata(gallery) != 1) {
+        throw new IllegalStateException("元数据更新失败");
+      }
+
+      // 封面同步放在元数据之后：它会把实体上的 title / description 抄进类型表
+      galleryMediaService.syncCover(gallery);
+
+      // 被移除媒体的 OSS 对象要等提交之后才删，见 discardRemovedAfterCommit
+      discardRemovedAfterCommit(removed);
+
+      return galleryQueryService.item(id, null);
+    } catch (IOException e) {
+      // 上传本身失败，此时数据库还一个字都没改过，清掉这次已经传上去的那些即可
+      cleanupUploaded(uploadedForRollback);
+      log.error("编辑作品 {} 时上传 OSS 失败", id, e);
+      return Result.error(500, "上传文件失败");
+    } catch (RuntimeException e) {
+      // 数据库的改动会随事务回滚，OSS 对象不会，必须显式清理
+      cleanupUploaded(uploadedForRollback);
+      log.error("编辑作品 {} 失败", id, e);
+      markRollback();
+      return Result.error(500, "保存失败");
+    }
+  }
+
+  /**
+   * 把「删掉被移除媒体的 OSS 对象」挂到事务的提交点之后。
+   *
+   * 直接写在方法体里是不对的：@Transactional 的方法体返回之后才提交，那一刻数据库的改动
+   * 还可能回滚。提前删掉对象的话，回滚之后那几行仍然指向一个已经不在桶里的文件，
+   * 而没有任何地方记着它们曾经存在过。
+   *
+   * 提交点的回调要求当前线程有活动的事务同步（@Transactional 的方法里恒成立）。
+   */
+  private void discardRemovedAfterCommit(List<GalleryMedia> removed) {
+    if (removed.isEmpty()) return;
+    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+      @Override
+      public void afterCommit() {
+        removed.forEach(media -> discardOldObject(media.getSrc()));
+      }
+    });
+  }
+
+  /** 作者本人或管理员。判定复用 OwnerAccess，与另外几条编辑路径同一个口径。 */
+  private boolean canManage(Long ownerId, User currentUser) {
+    if (currentUser == null) return false;
+    if (ownerAccess.isOwner(currentUser)) return true;
+    return ownerId != null && ownerId.equals(currentUser.getId());
+  }
+
+  /**
+   * 提交成功后丢弃不再被引用的旧对象。
+   *
+   * 这里**不**让调用方失败：用户的列表已经是好的了，那些对象只是垃圾。
+   * 删不掉就写进可重试记录，别把一次成功的保存报成失败。
+   */
+  private void discardOldObject(String src) {
+    if (StringUtils.isBlank(src)) return;
+    try {
+      ossUtil.deleteByPublicUrl(src);
+    } catch (RuntimeException e) {
+      log.error("编辑作品后清理被移除的媒体失败：{}", src, e);
+      ossCleanupRecordService.recordFailure(src, OSS_CLEANUP_REASON);
+    }
+  }
+
+  /**
+   * 本次新传的对象在失败时清掉。清理本身失败也要留痕，
+   * 否则桶里会多一个既没入库、也没有任何记录的孤儿对象。
+   */
+  private void cleanupUploaded(List<String> urls) {
+    for (String url : urls) {
+      try {
+        ossUtil.deleteByPublicUrl(url);
+      } catch (RuntimeException e) {
+        log.error("编辑作品失败后的 OSS 清理也失败了：{}", url, e);
+        ossCleanupRecordService.recordFailure(url, OSS_CLEANUP_REASON);
+      }
+    }
+  }
+
+  /**
+   * 捕获异常后不再向外抛出，事务不会自动回滚，必须显式标记，
+   * 否则「媒体列表已经换掉、元数据没写成功」这种半截状态会被提交。
+   *
+   * 先判断事务是否真的存在：直接调用本方法时（例如单元测试里没有代理）没有活动事务，
+   * 此时 currentTransactionStatus() 会抛异常，而那种情况下本来也没有东西需要回滚。
+   */
+  private void markRollback() {
+    if (TransactionSynchronizationManager.isActualTransactionActive()) {
+      TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
+    }
+  }
+}

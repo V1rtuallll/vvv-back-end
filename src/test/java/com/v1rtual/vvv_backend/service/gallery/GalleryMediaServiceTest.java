@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -191,5 +192,74 @@ class GalleryMediaServiceTest {
   void coverSyncRefusesWhenTheGalleryHasNoMediaLeft() {
     when(galleryMediaMapper.selectCover(7L)).thenReturn(null);
     assertThrows(IllegalStateException.class, () -> service().syncCover(gallery()));
+  }
+
+  // ===== 整组重写（编辑弹窗的保存）=====
+
+  private static GalleryMedia slot(long id) {
+    return GalleryMedia.builder().id(id).build();
+  }
+
+  private static GalleryMedia newSlot(String src) {
+    return GalleryMedia.builder().src(src).type(ResourceType.photo).build();
+  }
+
+  /**
+   * 删掉不在最终列表里的行、按最终列表的下标重排、缺的行插进去，三件事一次做完。
+   *
+   * 分开做的话，中间任何一刻列表都不是调用方以为的那份，而读到的封面可能就是错的。
+   */
+  @Test
+  void rewritingTheListDeletesReordersAndInsertsInOneGo() {
+    when(galleryMediaMapper.selectByGalleryId(7L)).thenReturn(List.of(
+        media(1L, "https://example.test/imgs/a.png", ResourceType.photo, 0),
+        media(2L, "https://example.test/imgs/b.png", ResourceType.photo, 1),
+        media(3L, "https://example.test/imgs/c.png", ResourceType.photo, 2)));
+    when(galleryMediaMapper.insert(any())).thenReturn(1);
+
+    List<GalleryMedia> removed = service().replaceAllOf(7L,
+        List.of(newSlot("https://example.test/imgs/n.png"), slot(2L), slot(1L)));
+
+    // 被删掉的行要交回调用方：它们的 src 是 OSS 对象唯一的线索，行一删就没人记得了
+    assertEquals(1, removed.size());
+    assertEquals(3L, removed.get(0).getId());
+    assertEquals("https://example.test/imgs/c.png", removed.get(0).getSrc());
+
+    verify(galleryMediaMapper).deleteById(3L);
+    verify(galleryMediaMapper, never()).deleteById(1L);
+    verify(galleryMediaMapper, never()).deleteById(2L);
+
+    var inserted = org.mockito.ArgumentCaptor.forClass(GalleryMedia.class);
+    verify(galleryMediaMapper).insert(inserted.capture());
+    assertEquals(7L, inserted.getValue().getGalleryId());
+    assertEquals("https://example.test/imgs/n.png", inserted.getValue().getSrc());
+    assertEquals(0, inserted.getValue().getSortOrder());
+    assertNull(inserted.getValue().getClientMediaId());
+
+    verify(galleryMediaMapper).updateSortOrder(2L, 1);
+    verify(galleryMediaMapper).updateSortOrder(1L, 2);
+  }
+
+  /**
+   * 越界改的是别的作品的行 —— sort_order 一改，那条作品的第一张就换人了。
+   *
+   * 调用方自己也会拦一道（它要返回 400 而不是异常），但写入口不能靠调用方记得。
+   */
+  @Test
+  void rewritingRefusesAMediaThatBelongsToAnotherWork() {
+    when(galleryMediaMapper.selectByGalleryId(7L))
+        .thenReturn(List.of(media(1L, "https://example.test/imgs/a.png", ResourceType.photo, 0)));
+
+    assertThrows(IllegalArgumentException.class, () -> service().replaceAllOf(7L, List.of(slot(9L))));
+
+    verify(galleryMediaMapper, never()).deleteById(any());
+    verify(galleryMediaMapper, never()).updateSortOrder(any(), anyInt());
+  }
+
+  /** I4：删空整组的调用是调用方的 bug，不能让它悄悄变成「这条作品没有封面」 */
+  @Test
+  void rewritingRefusesToEmptyTheList() {
+    assertThrows(IllegalArgumentException.class, () -> service().replaceAllOf(7L, List.of()));
+    verify(galleryMediaMapper, never()).selectByGalleryId(any());
   }
 }

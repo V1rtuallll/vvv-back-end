@@ -1,8 +1,11 @@
 package com.v1rtual.vvv_backend.service.gallery;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
@@ -135,6 +138,66 @@ public class GalleryMediaService {
     return galleryMediaMapper.selectByGalleryIds(galleryIds).stream()
         .collect(Collectors.groupingBy(GalleryMedia::getGalleryId,
             LinkedHashMap::new, Collectors.toList()));
+  }
+
+  /**
+   * 整组换掉一条作品的媒体列表：删掉不在最终列表里的行、按最终列表的下标重排、
+   * 缺的行插进去。编辑弹窗的保存走这里。
+   *
+   * 三件事收在一个方法里，是因为拆开之后删除与重排迟早会被不同调用方以不同顺序调用，
+   * 而中间任何一刻列表都不是调用方以为的那份 —— 那一刻读到的封面可能就是错的。
+   *
+   * 返回被删掉的那些行：它们的 src 是 OSS 对象**唯一的线索**，调用方要拿它去清理桶。
+   * 行一旦删掉，那些地址就没有任何地方记着了。
+   *
+   * 方法自带事务：这三步要么一起成功、要么都不动。调用方自己开了事务时，
+   * 本方法的事务会与它合并，删、排、插仍在同一个事务里。
+   *
+   * @param finalOrder 有序的最终列表，下标即新的 sort_order（0 号是封面）。
+   *                   带 id 的表示保留已有媒体，不带 id 的表示一行新的（src / type 必填）
+   */
+  @Transactional
+  public List<GalleryMedia> replaceAllOf(Long galleryId, List<GalleryMedia> finalOrder) {
+    if (galleryId == null || finalOrder == null || finalOrder.isEmpty()) {
+      // I4：删空整组的调用是调用方的 bug。放它过去的话，库里会留下一条没有媒体的作品，
+      // 而封面、类型表、首页随机全都指向一个已经不存在的列表
+      throw new IllegalArgumentException("作品至少要保留一个媒体");
+    }
+
+    List<GalleryMedia> current = galleryMediaMapper.selectByGalleryId(galleryId);
+    Set<Long> ownIds = current.stream().map(GalleryMedia::getId).collect(Collectors.toSet());
+    Set<Long> keptIds = finalOrder.stream().map(GalleryMedia::getId)
+        .filter(Objects::nonNull).collect(Collectors.toSet());
+    for (Long keptId : keptIds) {
+      // 写入口自己也要认归属，不能只靠调用方先查一遍：越界改的是别的作品的行，
+      // 而 sort_order 一改，那条作品的第一张（封面）就换人了
+      if (!ownIds.contains(keptId)) {
+        throw new IllegalArgumentException("媒体 " + keptId + " 不属于这个作品");
+      }
+    }
+
+    List<GalleryMedia> removed = new ArrayList<>();
+    for (GalleryMedia media : current) {
+      if (keptIds.contains(media.getId())) continue;
+      galleryMediaMapper.deleteById(media.getId());
+      removed.add(media);
+    }
+
+    for (int index = 0; index < finalOrder.size(); index++) {
+      GalleryMedia slot = finalOrder.get(index);
+      if (slot.getId() != null) {
+        galleryMediaMapper.updateSortOrder(slot.getId(), index);
+      } else if (galleryMediaMapper.insert(GalleryMedia.builder()
+          .galleryId(galleryId)
+          .src(slot.getSrc())
+          .type(slot.getType())
+          .sortOrder(index)
+          .clientMediaId(null)
+          .build()) != 1) {
+        throw new IllegalStateException("媒体入库失败");
+      }
+    }
+    return removed;
   }
 
   /**

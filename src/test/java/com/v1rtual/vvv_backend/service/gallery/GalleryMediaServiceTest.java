@@ -96,6 +96,7 @@ class GalleryMediaServiceTest {
     Gallery gallery = gallery();
     when(galleryMediaMapper.selectCover(7L))
         .thenReturn(media(9L, "https://example.test/gif/new.gif", ResourceType.gif, 0));
+    when(typedMediaStore.insert(any(), any(), any(), any(), any(), any())).thenReturn(1);
     when(galleryMapper.updateSrcAndType(7L, "https://example.test/gif/new.gif", ResourceType.gif))
         .thenReturn(1);
 
@@ -111,6 +112,49 @@ class GalleryMediaServiceTest {
     // 调用方手里的实体也要跟着变，否则后续读它的人看到的是旧封面
     assertEquals("https://example.test/gif/new.gif", gallery.getSrc());
     assertEquals(ResourceType.gif, gallery.getType());
+  }
+
+  /**
+   * 类型表一行都没写成时整个同步必须失败，gallery 行一个字都不能动。
+   *
+   * 丢掉这个返回值的话，方法会照常把 gallery 行改成新封面并正常返回 ——
+   * I2 当场破裂（新封面不在任何类型表里），而且没有任何地方会报错。
+   */
+  @Test
+  void coverSyncFailsWhenTheTypeRowCannotBeWritten() {
+    Gallery gallery = gallery();
+    when(galleryMediaMapper.selectCover(7L))
+        .thenReturn(media(9L, "https://example.test/gif/new.gif", ResourceType.gif, 0));
+    when(typedMediaStore.insert(any(), any(), any(), any(), any(), any())).thenReturn(0);
+
+    assertThrows(IllegalStateException.class, () -> service().syncCover(gallery));
+
+    verify(galleryMapper, never()).updateSrcAndType(any(), anyString(), any());
+    assertEquals("https://example.test/imgs/old.png", gallery.getSrc());
+  }
+
+  /** 替换封面之后让媒体行跟上：改的是那一行自己的 id，不是作品 id。 */
+  @Test
+  void updatingTheCoverSrcTargetsTheCoverRow() {
+    when(galleryMediaMapper.selectCover(7L))
+        .thenReturn(media(9L, "https://example.test/imgs/old.png", ResourceType.photo, 0));
+    when(galleryMediaMapper.updateSrc(9L, "https://example.test/imgs/new.png")).thenReturn(1);
+
+    assertEquals(1, service().updateCoverSrc(7L, "https://example.test/imgs/new.png"));
+    verify(galleryMediaMapper).updateSrc(9L, "https://example.test/imgs/new.png");
+  }
+
+  /**
+   * 回填之前的历史数据没有媒体行，一行也同步不了。
+   *
+   * 返回 0 而不是抛异常：调用方怎么处理这个 0 是它的事，这里只负责如实回答。
+   */
+  @Test
+  void updatingTheCoverSrcOfALegacyGalleryUpdatesNothing() {
+    when(galleryMediaMapper.selectCover(7L)).thenReturn(null);
+
+    assertEquals(0, service().updateCoverSrc(7L, "https://example.test/imgs/new.png"));
+    verify(galleryMediaMapper, never()).updateSrc(any(), anyString());
   }
 
   @Test

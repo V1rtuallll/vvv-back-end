@@ -209,10 +209,17 @@ public class GalleryUploadService {
       newUrl = ossUtil.upload(file, MediaTypeDirectory.directoryFor(type));
       if (StringUtils.isBlank(newUrl)) throw new IllegalStateException("OSS 未返回可访问地址");
 
-      // 类型在这里跟着一起写：换封面时新文件与旧文件同族即可，而 photo 与 gif 是一族，
-      // 只改 src 会让 gallery 表说它是动图、类型表里却在 photo 表
+      // 这里的 type 恒等于 gallery.getType()：上面那处严格相等判断已经把跨型替换拒掉了，
+      // 所以这次调用并不换型。三参形式仍然必要 —— syncCover 那条路径真的会换型，
+      // 收成「只改 src」的写法之后那种场景就没法表达了
       if (galleryMapper.updateSrcAndType(id, newUrl, type) != 1) throw new IllegalStateException("Gallery 资源更新失败");
       if (updateTypedSrc(type, oldSrc, newUrl) != 1) throw new IllegalStateException("媒体资源更新失败");
+
+      // 媒体列表是第三处，漏掉它 I1 当场就不成立：读到的封面是刚被删掉的那个对象，
+      // 详情弹窗的第一张图成了死链，而页面不报错
+      if (galleryMediaService.updateCoverSrc(id, newUrl) != 1) {
+        throw new IllegalStateException("媒体列表封面更新失败");
+      }
 
       // 数据库已经指向新文件，旧对象成了垃圾。删不掉只记待重试，不影响这次替换的结果。
       discardOldObject(oldSrc);

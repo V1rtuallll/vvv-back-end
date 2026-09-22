@@ -2,7 +2,6 @@ package com.v1rtual.vvv_backend.service.gallery;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -597,7 +596,6 @@ class GalleryQueryServiceTest {
     Gallery row = Gallery.builder().id(9L).type(ResourceType.photo).src(ITEM_SRC).title("t").userId(7L).build();
     GalleryMapper galleryMapper = mock(GalleryMapper.class);
     when(galleryMapper.selectBgmCandidates()).thenReturn(List.of(row));
-    when(galleryMapper.selectBySrc(any())).thenReturn(row);
 
     // 候选列表不查媒体。下发空数组而不是补一条「自己」：
     // 后者会让「没带」与「真的只有一条」在数据上分不出来

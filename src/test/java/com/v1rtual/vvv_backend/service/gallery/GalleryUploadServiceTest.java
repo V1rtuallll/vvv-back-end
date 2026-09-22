@@ -9,6 +9,7 @@ import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -16,6 +17,7 @@ import static org.mockito.Mockito.when;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.springframework.boot.autoconfigure.web.servlet.MultipartProperties;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.mock.web.MockMultipartFile;
@@ -99,6 +101,8 @@ class GalleryUploadServiceTest {
    */
   {
     when(galleryMediaService.insertFirst(any(), any(), any())).thenReturn(1);
+    // 媒体列表的封面同步默认也写成功，理由同上：替换路径的用例关心的是别的分支
+    when(galleryMediaService.updateCoverSrc(any(), any())).thenReturn(1);
   }
 
   private GalleryUploadService service() {
@@ -455,12 +459,15 @@ class GalleryUploadServiceTest {
 
     assertEquals(200, result.getCode());
     assertEquals("https://example.test/imgs/new.png", result.getData().getUrl());
-    // src 是两张表的关联键，必须一起改
-    verify(galleryMapper).updateSrcAndType(7L, "https://example.test/imgs/new.png", ResourceType.photo);
+    // src 是两张表的关联键，类型表必须跟着改
     verify(photoMapper).updateSrcBySrc("https://example.test/imgs/old.png",
         "https://example.test/imgs/new.png");
-    // 数据库已经指向新文件之后，才轮到删旧对象
-    verify(ossUtil).deleteByPublicUrl("https://example.test/imgs/old.png");
+    // 媒体列表是第三处，漏掉它 I1 当场就不成立：读到的封面是刚被删掉的那个对象，
+    // 详情弹窗的第一张图成了死链，而页面不报错。顺序也钉住 —— 封面行要赶在旧对象被删之前跟上
+    InOrder inOrder = inOrder(galleryMapper, galleryMediaService, ossUtil);
+    inOrder.verify(galleryMapper).updateSrcAndType(7L, "https://example.test/imgs/new.png", ResourceType.photo);
+    inOrder.verify(galleryMediaService).updateCoverSrc(7L, "https://example.test/imgs/new.png");
+    inOrder.verify(ossUtil).deleteByPublicUrl("https://example.test/imgs/old.png");
   }
 
   @Test
@@ -536,6 +543,8 @@ class GalleryUploadServiceTest {
 
     assertEquals(200, result.getCode());
     verify(cleanupRecordService).recordFailure(contains("old.png"), anyString());
+    // 旧对象没删掉只影响那次清理，封面行照样要跟上，否则详情弹窗第一张图就是死链
+    verify(galleryMediaService).updateCoverSrc(7L, "https://example.test/imgs/new.png");
   }
 
   // ===== 替换保护：别把别人正在用的曲子换掉 =====
@@ -593,6 +602,7 @@ class GalleryUploadServiceTest {
     assertEquals(200, result.getCode());
     // 守卫确实被问过一次再放行，不是「碰巧没拦」
     verify(galleryMapper).countByBgmSrc("https://example.test/imgs/old.png");
+    verify(galleryMediaService).updateCoverSrc(7L, "https://example.test/imgs/new.png");
     verify(ossUtil).deleteByPublicUrl("https://example.test/imgs/old.png");
   }
 }

@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -35,15 +36,28 @@ class TypedMediaStoreTest {
 
     assertEquals(1, store().insert(ResourceType.photo, "t", "d", "s", 1L, "u"));
     verify(photoMapper).insert(any());
+    verify(gifMapper, never()).insert(any());
+    verify(videoMapper, never()).insert(any());
+    verify(musicMapper, never()).insert(any());
 
     assertEquals(1, store().insert(ResourceType.gif, "t", "d", "s", 1L, "u"));
     verify(gifMapper).insert(any());
+    verify(videoMapper, never()).insert(any());
+    verify(musicMapper, never()).insert(any());
 
     assertEquals(1, store().insert(ResourceType.video, "t", "d", "s", 1L, "u"));
     verify(videoMapper).insert(any());
+    verify(musicMapper, never()).insert(any());
 
     assertEquals(1, store().insert(ResourceType.music, "t", "d", "s", 1L, "u"));
     verify(musicMapper).insert(any());
+
+    // 上面那些 never() 只挡住「后来的表被提前写了」。分派哪天被改成一次写两张表，
+    // 每种类型自己那张会被写两次还是绿的 —— 这里钉住上界：每种类型总共只落一次
+    verify(photoMapper, times(1)).insert(any());
+    verify(gifMapper, times(1)).insert(any());
+    verify(videoMapper, times(1)).insert(any());
+    verify(musicMapper, times(1)).insert(any());
   }
 
   @Test

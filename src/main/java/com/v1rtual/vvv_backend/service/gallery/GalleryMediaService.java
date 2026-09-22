@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.v1rtual.vvv_backend.entity.Gallery;
 import com.v1rtual.vvv_backend.entity.GalleryMedia;
@@ -107,9 +108,13 @@ public class GalleryMediaService {
    * 顺序也不能反成「先改 gallery 行、再动类型表」：src 是两张表之间的关联键，
    * 中间任何一刻两边对不上，这一行就会在首页随机里指向一个类型表里不存在的地址。
    *
+   * 方法自带事务：类型表的「先删后插」与 gallery 行的更新必须一起成功或一起失败。
+   * 调用方自己开了事务时，本方法的事务会与它合并，三步仍在同一个事务里。
+   *
    * @param gallery 必须是库里那一条的最新实体；方法结束时会把它同步成封面值，
    *                调用方手里这份实体随即可用，不必再查一次
    */
+  @Transactional
   public void syncCover(Gallery gallery) {
     GalleryMedia cover = galleryMediaMapper.selectCover(gallery.getId());
     if (cover == null) {
@@ -122,13 +127,31 @@ public class GalleryMediaService {
     // 类型表：旧封面让位，新封面补位。
     // 先删后插，中间那一刻两张表都对不上，所以整段必须在同一个事务里。
     typedMediaStore.deleteBySrc(gallery.getType(), gallery.getSrc());
-    typedMediaStore.insert(cover.getType(), gallery.getTitle(), gallery.getDescription(),
-        cover.getSrc(), gallery.getUserId(), gallery.getUploaderUsername());
+    // 返回值必须查：类型为 null 时类型表一行都没写下，而下面照样会把 gallery 行改成
+    // 新封面 —— 两张表从此对不上，正是这个类要防的那类静默故障
+    if (typedMediaStore.insert(cover.getType(), gallery.getTitle(), gallery.getDescription(),
+        cover.getSrc(), gallery.getUserId(), gallery.getUploaderUsername()) != 1) {
+      throw new IllegalStateException("封面对齐失败");
+    }
 
     if (galleryMapper.updateSrcAndType(gallery.getId(), cover.getSrc(), cover.getType()) != 1) {
       throw new IllegalStateException("封面对齐失败");
     }
     gallery.setSrc(cover.getSrc());
     gallery.setType(cover.getType());
+  }
+
+  /**
+   * 替换封面文件之后，让媒体列表里的封面行跟上。
+   *
+   * 替换路径改的是 gallery 行与类型表，媒体列表是第三处 —— 漏掉它 I1 当场就不成立，
+   * 而症状是详情弹窗的第一张图变成死链，页面不报错。
+   *
+   * @return 更新的行数；0 表示这条作品没有任何媒体行（回填之前的历史数据）
+   */
+  public int updateCoverSrc(Long galleryId, String newSrc) {
+    GalleryMedia cover = galleryMediaMapper.selectCover(galleryId);
+    if (cover == null) return 0;
+    return galleryMediaMapper.updateSrc(cover.getId(), newSrc);
   }
 }

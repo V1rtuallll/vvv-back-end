@@ -6,14 +6,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
@@ -21,6 +24,7 @@ import org.mockito.InOrder;
 
 import com.v1rtual.vvv_backend.entity.Comment;
 import com.v1rtual.vvv_backend.entity.Gallery;
+import com.v1rtual.vvv_backend.entity.GalleryMedia;
 import com.v1rtual.vvv_backend.entity.ResourceType;
 import com.v1rtual.vvv_backend.entity.TargetType;
 import com.v1rtual.vvv_backend.entity.User;
@@ -44,7 +48,9 @@ class GalleryManageServiceTest {
    *
    * 于是「删作品时连带清理组内其余媒体的 OSS 对象」这件事在本类里退化成
    * 只清封面那一个，也就是改动之前的形状，既有的删除用例因此不必逐条加桩。
-   * 组内有多条媒体的场景由专门的那条新用例覆盖。
+   * 组内有多条媒体的场景要自己桩 listOf，由
+   * {@link #deletingAWorkAlsoClearsTheObjectsOfItsOtherMedia} 与
+   * {@link #aSingleFailedObjectCleanupTurnsTheWholeDeleteIntoAFailure} 两条用例覆盖。
    */
   private final GalleryMediaService galleryMediaService = mock(GalleryMediaService.class);
   private final OssCleanupRecordService cleanupRecordService = mock(OssCleanupRecordService.class);
@@ -74,6 +80,12 @@ class GalleryManageServiceTest {
 
   private static Gallery gallery(Long id, Long ownerId) {
     return Gallery.builder().id(id).src(SRC).type(ResourceType.photo).title("旧标题").userId(ownerId).build();
+  }
+
+  /** 组内一条媒体。id 只用来说明是两条不同的行，删除路径不看它。 */
+  private static GalleryMedia media(long id, String src) {
+    return GalleryMedia.builder().id(id).galleryId(7L).src(src)
+        .type(ResourceType.photo).sortOrder(0).build();
   }
 
   private static Comment comment(Long id, Long ownerId) {
@@ -346,6 +358,61 @@ class GalleryManageServiceTest {
 
     assertEquals(404, result.getCode());
     verify(ossUtil, never()).deleteByPublicUrl(anyString());
+  }
+
+  // ===== 删除时组内其余媒体的 OSS 对象 =====
+
+  private static final String SECOND_SRC = "https://example.test/imgs/b.png";
+
+  /**
+   * 删作品时组内其余媒体的 OSS 对象也要清掉。
+   *
+   * 它们的地址只能在删库**之前**读出来 —— gallery_media 的行删掉之后就没有任何线索了。
+   * 这里钉住三件事：封面清了、组内那条别的媒体也清了、而且读列表发生在删库之前。
+   */
+  @Test
+  void deletingAWorkAlsoClearsTheObjectsOfItsOtherMedia() {
+    Gallery stored = gallery(7L, 100L);
+    when(galleryMapper.selectById(7L)).thenReturn(stored);
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    when(deletionService.deleteGallery(stored)).thenReturn(1);
+    // 两条组内媒体：一条故意与封面同址（去重之后不该被删第二次），一条是别的对象
+    when(galleryMediaService.listOf(7L)).thenReturn(List.of(media(1L, SRC), media(2L, SECOND_SRC)));
+
+    Result<Void> result = service().deleteGallery(7L, user(100L, "作者"));
+
+    assertEquals(200, result.getCode());
+    verify(ossUtil).deleteByPublicUrl(SRC);
+    verify(ossUtil).deleteByPublicUrl(SECOND_SRC);
+    // 同址的那条不重复删：地址总共只该被删两次（封面 + 组内那条不同的）
+    verify(ossUtil, times(2)).deleteByPublicUrl(anyString());
+    verify(cleanupRecordService, never()).recordFailure(anyString(), anyString());
+
+    // 顺序守卫：地址只能趁 gallery_media 的行还在的时候读出来，删库之后就没有线索了
+    InOrder inOrder = inOrder(galleryMediaService, deletionService);
+    inOrder.verify(galleryMediaService).listOf(7L);
+    inOrder.verify(deletionService).deleteGallery(stored);
+  }
+
+  /**
+   * 只要有一个对象没删掉，整次删除就报失败（失败的那些各自已落可重试记录）。
+   * 报成功的话，桶里会留下一批没人知道还在的对象。
+   */
+  @Test
+  void aSingleFailedObjectCleanupTurnsTheWholeDeleteIntoAFailure() {
+    Gallery stored = gallery(7L, 100L);
+    when(galleryMapper.selectById(7L)).thenReturn(stored);
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    when(deletionService.deleteGallery(stored)).thenReturn(1);
+    when(galleryMediaService.listOf(7L)).thenReturn(List.of(media(1L, SRC), media(2L, SECOND_SRC)));
+    doThrow(new RuntimeException("oss down")).when(ossUtil).deleteByPublicUrl(SECOND_SRC);
+
+    Result<Void> result = service().deleteGallery(7L, user(100L, "作者"));
+
+    assertEquals(500, result.getCode());
+    // 封面那个照删不误，失败的那个单独落一条可重试记录
+    verify(ossUtil).deleteByPublicUrl(SRC);
+    verify(cleanupRecordService).recordFailure(eq(SECOND_SRC), anyString());
   }
 
   // ===== 删除保护：别把别人正在用的曲子删掉 =====

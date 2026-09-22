@@ -7,9 +7,17 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import java.nio.charset.StandardCharsets;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.http.HttpMethod;
+import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.multipart.MultipartFile;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.v1rtual.vvv_backend.dto.GalleryMediaCommitDTO;
@@ -62,5 +70,39 @@ class GalleryCommitMediaControllerTest {
     verify(mediaCommitService).commit(eq(7L), payload.capture(), any(), any());
     assertEquals("新标题", payload.getValue().getTitle());
     assertEquals(11L, payload.getValue().getItems().get(0).getMediaId());
+  }
+
+  /**
+   * multipart part 的顺序就是 MultipartFile[] 的绑定顺序 —— 前端发的是
+   * {@code {newFile: N}} 与 {@code files[N]} 的对应关系，全靠这一跳。
+   *
+   * 两侧的单测各自都碰不到它：上面两条直接调控制器方法，服务层拿到的数组是测试自己拼的。
+   * 绑定顺序一变，文件会静默落错位（想换第 2 条，结果换了封面），而请求照常返回成功。
+   * 所以这里发一次真的 multipart 请求，断言服务层收到的两份文件与 payload 里的下标一一对应。
+   */
+  @Test
+  void bindsTheFilePartsToTheArrayInTheOrderTheyWereSent() throws Exception {
+    when(mediaCommitService.commit(eq(7L), any(), any(), any()))
+        .thenReturn(Result.success(GalleryItemVO.builder().id(7L).build()));
+
+    MockMvcBuilders.standaloneSetup(controller()).build()
+        .perform(multipart(HttpMethod.PUT, "/api/gallery/7")
+            .file(new MockMultipartFile("files", "first.png", "image/png",
+                "第一个".getBytes(StandardCharsets.UTF_8)))
+            .file(new MockMultipartFile("files", "second.png", "image/png",
+                "第二个".getBytes(StandardCharsets.UTF_8)))
+            .param("payload", "{\"items\":[{\"newFile\":0},{\"newFile\":1}]}"))
+        .andExpect(status().isOk());
+
+    ArgumentCaptor<MultipartFile[]> files = ArgumentCaptor.forClass(MultipartFile[].class);
+    ArgumentCaptor<GalleryMediaCommitDTO> payload = ArgumentCaptor.forClass(GalleryMediaCommitDTO.class);
+    verify(mediaCommitService).commit(eq(7L), payload.capture(), files.capture(), any());
+
+    assertEquals(2, files.getValue().length);
+    // 下标 0 的那条新文件必须是先发的那个 part，否则「换第几条」会落错位
+    assertEquals("first.png", files.getValue()[0].getOriginalFilename());
+    assertEquals("second.png", files.getValue()[1].getOriginalFilename());
+    assertEquals(0, (int) payload.getValue().getItems().get(0).getNewFile());
+    assertEquals(1, (int) payload.getValue().getItems().get(1).getNewFile());
   }
 }

@@ -91,9 +91,13 @@ class GalleryBgmResolverTest {
 
   @Test
   void aMusicItemStillMayNotCarryBackgroundMusic() {
-    // 音乐项自己就是一首曲子，再配一首是两个音源同时响，且第二路没有任何控件解释
-    assertThrows(IllegalArgumentException.class,
-        () -> resolver().resolve(SONG, "audio", ResourceType.music));
+    // 必须把归属这一关也喂饱（规则 5），否则规则 3 被整个删掉时，
+    // 这个调用会撞上规则 5 抛出同类型的异常，用例照绿 —— 看着守住了边界，其实没守
+    when(galleryBgmMediaMapper.selectByUrl(SONG)).thenReturn(new GalleryBgmMedia());
+
+    // 钉住是规则 3 拒绝的，不是别处顺路抛的
+    assertEquals("音乐本身就在播放自己，不能再配背景音乐",
+        messageOf(SONG, "audio", ResourceType.music));
   }
 
   /** 清空不触发规则 3：给一条 music 项发「清空 BGM」是个无害的空操作，不该被拒绝 */

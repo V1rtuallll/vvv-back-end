@@ -79,7 +79,7 @@ public class GalleryBgmResolver {
       throw new IllegalArgumentException("背景音乐类型只支持 audio 或 video");
     }
 
-    // 3) 音乐项本身就在放它自己，再配一首就是两个音源同时响，且第二路没有控件解释。
+    // 3) 音乐项自己就是音源，再配一首会出现第二条没有控件解释的音轨。
     //    视频项不在此列：视频原声与 BGM 同时出声是明确的产品要求，
     //    详情里两个都在响，暂停按钮也一起管
     if (targetType == ResourceType.music) {

@@ -5,6 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -13,13 +16,11 @@ import static org.mockito.Mockito.when;
 import java.io.IOException;
 import java.util.List;
 
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.springframework.boot.autoconfigure.web.servlet.MultipartProperties;
 import org.springframework.mock.web.MockMultipartFile;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.v1rtual.vvv_backend.dto.GalleryMediaCommitDTO;
@@ -75,6 +76,15 @@ class GalleryMediaCommitServiceTest {
    */
   private final GalleryMediaService galleryMediaService =
       new GalleryMediaService(galleryMediaMapper, galleryMapper, typedMediaStore);
+  /**
+   * 真的数据库 bean 包同一组桩。
+   *
+   * 它必须是一个独立的 bean（编排方那一步的返回值就是「事务已提交」的信号），
+   * 但 @Transactional 在单元测试里不起作用，所以这里照样能直接构造它，
+   * 三条数据库改动也就照样落在 mapper 断言上。
+   */
+  private final GalleryMediaCommitDbService commitDbService =
+      new GalleryMediaCommitDbService(galleryMapper, galleryMediaService);
   private final GalleryQueryService galleryQueryService = mock(GalleryQueryService.class);
   private final OssCleanupRecordService cleanupRecordService = mock(OssCleanupRecordService.class);
   private final MultipartProperties multipartProperties = new MultipartProperties();
@@ -98,9 +108,14 @@ class GalleryMediaCommitServiceTest {
   }
 
   private GalleryMediaCommitService service() {
-    return new GalleryMediaCommitService(galleryMapper, galleryMediaService, galleryQueryService,
-        new UploadValidator(multipartProperties), ossUtil, cleanupRecordService, ownerAccess,
-        bgmResolver, bgmUsageGuard);
+    return service(commitDbService);
+  }
+
+  /** 换一个数据库 bean：钉「那一步返回之后才删 OSS」时用一个 mock 把边界画清楚。 */
+  private GalleryMediaCommitService service(GalleryMediaCommitDbService dbService) {
+    return new GalleryMediaCommitService(galleryMapper, galleryMediaService, dbService,
+        galleryQueryService, new UploadValidator(multipartProperties), ossUtil,
+        cleanupRecordService, ownerAccess, bgmResolver, bgmUsageGuard);
   }
 
   private static Gallery gallery(Long ownerId) {
@@ -160,31 +175,6 @@ class GalleryMediaCommitServiceTest {
     user.setId(id);
     user.setUsername(name);
     return user;
-  }
-
-  /**
-   * 打开一个事务同步，模拟 Spring 在 @Transactional 方法外层提供的东西。
-   *
-   * 方法体返回之后才提交，所以「删被移除媒体的 OSS 对象」挂在提交点的回调上；
-   * 单元测试里没有事务代理，registerSynchronization 会因为没有活动同步而抛，
-   * 这个环境要自己搭 —— 不搭的话红的是测试，不是实现。
-   */
-  private void beginTransaction() {
-    TransactionSynchronizationManager.initSynchronization();
-  }
-
-  /** 走到提交点：真实事务提交时 Spring 会做同一件事。 */
-  private void commitTransaction() {
-    TransactionSynchronizationManager.getSynchronizations()
-        .forEach(TransactionSynchronization::afterCommit);
-  }
-
-  @AfterEach
-  void clearTransactionSynchronization() {
-    // 没搭过事务同步的用例不走这一步：clearSynchronization 在没有活动同步时会抛
-    if (TransactionSynchronizationManager.isSynchronizationActive()) {
-      TransactionSynchronizationManager.clearSynchronization();
-    }
   }
 
   /** 一次成功的提交：库里三行、最终列表里两行加一个新文件，第一条最终被移除。 */
@@ -351,7 +341,6 @@ class GalleryMediaCommitServiceTest {
    */
   @Test
   void storesTheBackgroundMusicTheResolverApproved() throws Exception {
-    beginTransaction();
     stubAWorkingCommit();
     // 最终列表保持原顺序：封面没换人，封面同步因此什么都不做
     when(galleryMediaMapper.selectCover(GALLERY_ID))
@@ -395,24 +384,45 @@ class GalleryMediaCommitServiceTest {
     verify(ossUtil, never()).deleteByPublicUrl(anyString());
   }
 
+  /**
+   * 护栏放行的那一支：问过了、答复是「没人用」，于是照常继续删。
+   *
+   * 顺带钉住问的是封面自己的地址（I1：封面媒体的 src 与 gallery 行上的那个相同）。
+   */
   @Test
-  void dropsTheNewCoverCandidateGuardWhenTheCoverStays() throws Exception {
-    beginTransaction();
+  void proceedsWhenTheLeavingAddressIsNotUsedAsBackgroundMusic() throws Exception {
+    stubAWorkingCommit();
+    when(galleryMapper.countByBgmSrc(COVER_SRC)).thenReturn(0L);
+    when(galleryMediaMapper.selectCover(GALLERY_ID)).thenReturn(media(14L, UPLOADED_SRC, 0));
+    when(photoMapper.insert(any())).thenReturn(1);
+    when(galleryMapper.updateSrcAndType(GALLERY_ID, UPLOADED_SRC, ResourceType.photo)).thenReturn(1);
+
+    Result<GalleryItemVO> result = service().commit(GALLERY_ID, payload(keep(12L), fresh(0)),
+        new MultipartFile[] {png()}, member());
+
+    assertEquals(200, result.getCode());
+    verify(galleryMapper).countByBgmSrc(COVER_SRC);
+    verify(ossUtil).deleteByPublicUrl(COVER_SRC);
+    // 还在列表里的那条不许删
+    verify(ossUtil, never()).deleteByPublicUrl(SECOND_SRC);
+  }
+
+  /** 一个地址都不离开列表时护栏问都不问：这些行还要留着，桶里那些对象仍然有人用。 */
+  @Test
+  void asksNothingWhenNoMediaLeavesTheList() throws Exception {
     stubAWorkingCommit();
     when(galleryMapper.countByBgmSrc(any())).thenReturn(5L);
     when(galleryMediaMapper.selectCover(GALLERY_ID)).thenReturn(media(11L, COVER_SRC, 0));
 
     Result<GalleryItemVO> result =
-        service().commit(GALLERY_ID, payload(keep(11L), keep(12L)), null, member());
+        service().commit(GALLERY_ID, payload(keep(11L), keep(12L), keep(13L)), null, member());
 
     assertEquals(200, result.getCode());
-    // 封面还在这个列表里就不会被删，护栏问都不该问：这条地址仍然有人用
     verify(galleryMapper, never()).countByBgmSrc(anyString());
   }
 
   @Test
-  void commitsTheWholeListAndTheMetadataInOneTransaction() throws Exception {
-    beginTransaction();
+  void commitsTheWholeListAndTheMetadata() throws Exception {
     stubAWorkingCommit();
     // 新文件排到 0 号，封面因此换人：类型表要让位、gallery 行要跟上
     when(galleryMediaMapper.selectCover(GALLERY_ID)).thenReturn(media(14L, UPLOADED_SRC, 0));
@@ -454,14 +464,40 @@ class GalleryMediaCommitServiceTest {
     verify(photoMapper).deleteBySrc(COVER_SRC);
     assertEquals(UPLOADED_SRC, updated.getValue().getSrc(), "封面同步要把实体上的 src 也改过来");
 
-    // 被移除媒体的 OSS 对象在提交点之前一个字节都不许动：这一刻数据库还可能回滚
-    verify(ossUtil, never()).deleteByPublicUrl(THIRD_SRC);
-    commitTransaction();
+    // 被移除媒体的 OSS 对象：数据库那一步之后才删，这里不再有任何提交回调
     verify(ossUtil).deleteByPublicUrl(THIRD_SRC);
     // 还在列表里的对象不能删，它们仍然被引用着
     verify(ossUtil, never()).deleteByPublicUrl(COVER_SRC);
     verify(ossUtil, never()).deleteByPublicUrl(SECOND_SRC);
     verify(cleanupRecordService, never()).recordFailure(anyString(), anyString());
+  }
+
+  /**
+   * 顺序钉在「数据库那一步正常返回（即已经提交）之后，才动桶里的对象」。
+   *
+   * 边界用一个 mock 的数据库 bean 画出来：把删 OSS 提到它返回之前（哪怕仍在 try 里），
+   * 事务回滚时删掉的旧对象就找不回来了 —— 库里那几行指向一个不在桶里的文件。
+   */
+  @Test
+  void removesTheOldObjectsOnlyAfterTheDatabaseStepHasReturned() throws Exception {
+    GalleryMediaCommitDbService dbService = mock(GalleryMediaCommitDbService.class);
+    when(galleryMapper.selectById(GALLERY_ID)).thenReturn(gallery(1L));
+    when(ownerAccess.isOwner(any())).thenReturn(false);
+    when(galleryMediaMapper.selectByGalleryId(GALLERY_ID)).thenReturn(List.of(
+        media(11L, COVER_SRC, 0), media(13L, THIRD_SRC, 2)));
+    when(ossUtil.upload(any(), any())).thenReturn(UPLOADED_SRC);
+    when(dbService.replaceMediaAndMetadata(any(), any()))
+        .thenReturn(List.of(media(13L, THIRD_SRC, 2)));
+    when(galleryQueryService.item(GALLERY_ID, null))
+        .thenReturn(Result.success(GalleryItemVO.builder().id(GALLERY_ID).build()));
+
+    Result<GalleryItemVO> result = service(dbService).commit(GALLERY_ID,
+        payload(fresh(0), keep(11L)), new MultipartFile[] {png()}, member());
+
+    assertEquals(200, result.getCode());
+    InOrder order = inOrder(dbService, ossUtil);
+    order.verify(dbService).replaceMediaAndMetadata(any(), any());
+    order.verify(ossUtil).deleteByPublicUrl(THIRD_SRC);
   }
 
   /**
@@ -471,7 +507,6 @@ class GalleryMediaCommitServiceTest {
    */
   @Test
   void cleansUpTheUploadedObjectsWhenTheCommitFails() throws Exception {
-    beginTransaction();
     stubAWorkingCommit();
     when(galleryMapper.updateMetadata(any())).thenReturn(0);
 
@@ -499,5 +534,29 @@ class GalleryMediaCommitServiceTest {
     verify(ossUtil).deleteByPublicUrl(UPLOADED_SRC);
     verify(galleryMediaMapper, never()).deleteById(any());
     verify(galleryMapper, never()).updateMetadata(any());
+  }
+
+  /**
+   * 被移除的对象删不掉时**这次保存仍然算成功**，但必须留下可重试记录。
+   *
+   * 记录写在事务之外的独立连接上，所以它不会被回滚掉 —— 这正是原先挂在提交回调上时
+   * 丢掉的那条痕迹：那一刻事务已经提交、后面也不会再有 commit，记录会随连接归还被一并回滚。
+   * 记录里没有的东西，谁都不会去重试。
+   */
+  @Test
+  void aFailedOssDeletionKeepsTheSaveSuccessfulAndIsRecordedForRetry() throws Exception {
+    stubAWorkingCommit();
+    when(galleryMediaMapper.selectCover(GALLERY_ID)).thenReturn(media(11L, COVER_SRC, 0));
+    doThrow(new IllegalStateException("oss down")).when(ossUtil).deleteByPublicUrl(SECOND_SRC);
+
+    Result<GalleryItemVO> result =
+        service().commit(GALLERY_ID, payload(keep(11L)), null, member());
+
+    assertEquals(200, result.getCode(), "对象只是垃圾，删不掉不该把一次成功的保存报成失败");
+    verify(cleanupRecordService).recordFailure(eq(SECOND_SRC), anyString());
+    // 一个删不掉不停下：后面那些照删，而且不该被误记成失败
+    verify(ossUtil).deleteByPublicUrl(THIRD_SRC);
+    verify(cleanupRecordService, never()).recordFailure(eq(THIRD_SRC), anyString());
+    verify(galleryQueryService).item(GALLERY_ID, null);
   }
 }

@@ -10,10 +10,6 @@ import java.util.Set;
 
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.interceptor.TransactionAspectSupport;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.v1rtual.vvv_backend.dto.GalleryMediaCommitDTO;
@@ -36,13 +32,20 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * 编辑弹窗的保存：把一条作品的媒体列表**整组**换掉，连同元数据一起。
  *
- * 一次请求、一个事务。这是编辑与新建最大的不同 —— 新建时部分成功只是「少传了几张」，
+ * 这类**不在事务里**，它只做编排：全部前置校验 → 传新文件到 OSS →
+ * 由 {@link GalleryMediaCommitDbService} 在一个事务里改完数据库 → 事务之外
+ * 删被移除媒体的 OSS 对象。分工与 {@link GalleryManageService} 对
+ * {@link GalleryDeletionService} 一致：OSS 请求不应占用数据库事务，
+ * 而且数据库改动一旦提交，OSS 失败只能靠可重试记录收敛。
+ *
+ * 顺序不能反过来。桶是外部服务，数据库回滚带不动它：事务内删掉对象、之后事务回滚，
+ * 库里那几行就指向一个已经不在桶里的文件 —— 那是**不可恢复**的死链，比桶里留一个
+ * 没人引用的垃圾对象糟得多（垃圾对象正是 {@code oss_cleanup_record} 用来收敛的东西）。
+ * 事务失败时则反过来，清掉本次刚传上去的对象。
+ *
+ * 一次请求一个事务，这也是编辑与新建最大的不同 —— 新建时部分成功只是「少传了几张」，
  * 而编辑里有删除：删了一部分、新文件又没传成，作品就永久缺了几张，
  * 用户看到的是一份不完整的列表，而哪几张没了没有任何地方记着。
- *
- * **OSS 删除不在事务里。** 桶是外部服务，数据库回滚带不动它。顺序固定为
- * 「先传新文件 → 一个事务改库 → 提交后删被移除的对象」，删不掉就落可重试记录、
- * 不让这次保存失败。事务失败时反过来清掉本次刚传上去的对象。
  *
  * 媒体表的写一律交给 {@link GalleryMediaService}（那张表的唯一写入口，I1/I2 由它维护）：
  * 这条路径要动删除、重排与封面三处，任何一处漏掉同步都是静默故障。
@@ -56,6 +59,7 @@ public class GalleryMediaCommitService {
 
   private final GalleryMapper galleryMapper;
   private final GalleryMediaService galleryMediaService;
+  private final GalleryMediaCommitDbService commitDbService;
   private final GalleryQueryService galleryQueryService;
   private final UploadValidator uploadValidator;
   private final OssUtil ossUtil;
@@ -68,7 +72,6 @@ public class GalleryMediaCommitService {
    * @param payload 全量语义的最终值：items 是有序的最终媒体列表
    * @param files   本次新传的文件，items 里的 newFile 是它的下标；可以缺省
    */
-  @Transactional
   public Result<GalleryItemVO> commit(Long id, GalleryMediaCommitDTO payload, MultipartFile[] files,
       User user) {
     // 1) 前置校验。全部在动手之前：任何一条不通过时，桶里与库里都还没有改动
@@ -147,8 +150,9 @@ public class GalleryMediaCommitService {
       return Result.error(400, e.getMessage());
     }
 
-    // 5) 封面将被移除时先过 BGM 护栏。位置在删除与删 OSS **之前**：删掉之后那些配了它的图
-    //    会静默静音 —— 页面不报错、也没人记一笔。判据与删除路径共用同一个守卫，逻辑只有一份。
+    // 5) 封面将被移除时先过 BGM 护栏。位置在传文件与删行、删对象**之前**：
+    //    删掉之后那些配了它的图会静默静音 —— 页面不报错、也没人记一笔。
+    //    判据与删除路径共用同一个守卫，逻辑只有一份。
     //    existing 由 listOf 按 sort_order 升序取出，第一条就是封面（I1）
     GalleryMedia cover = existing.isEmpty() ? null : existing.get(0);
     boolean coverDropped = cover != null
@@ -158,9 +162,10 @@ public class GalleryMediaCommitService {
       if (blocked != null) return blocked;
     }
 
-    // 6) 先传新文件，再在一个事务里改库
+    // 6) 先传新文件，再让数据库 bean 在一个事务里改库
     Map<Integer, String> uploadedUrls = new LinkedHashMap<>();
     List<String> uploadedForRollback = new ArrayList<>();
+    List<GalleryMedia> removed;
     try {
       for (Integer index : newIndexes) {
         MultipartFile file = incoming[index];
@@ -181,57 +186,30 @@ public class GalleryMediaCommitService {
                 .type(resolvedTypes.get(item.getNewFile()))
                 .build());
       }
-      List<GalleryMedia> removed = galleryMediaService.replaceAllOf(id, finalOrder);
 
-      // 元数据（全量写）。title / description 这次就是最终值，不区分「改没改」；
-      // 其余列（alt / tags / category / duration）由实体上原样的值写回 ——
-      // 实体是 selectById 读出来的，没参与的列不会被抹掉
+      // 元数据（全量写）在这次请求里就是最终值，交给数据库 bean 一起提交
       gallery.setTitle(payload.getTitle());
       gallery.setDescription(payload.getDescription());
       gallery.setBgmSrc(bgm.src());
       gallery.setBgmType(bgm.type());
-      if (galleryMapper.updateMetadata(gallery) != 1) {
-        throw new IllegalStateException("元数据更新失败");
-      }
 
-      // 封面同步放在元数据之后：它会把实体上的 title / description 抄进类型表
-      galleryMediaService.syncCover(gallery);
-
-      // 被移除媒体的 OSS 对象要等提交之后才删，见 discardRemovedAfterCommit
-      discardRemovedAfterCommit(removed);
-
-      return galleryQueryService.item(id, null);
+      removed = commitDbService.replaceMediaAndMetadata(gallery, finalOrder);
     } catch (IOException e) {
       // 上传本身失败，此时数据库还一个字都没改过，清掉这次已经传上去的那些即可
       cleanupUploaded(uploadedForRollback);
       log.error("编辑作品 {} 时上传 OSS 失败", id, e);
       return Result.error(500, "上传文件失败");
     } catch (RuntimeException e) {
-      // 数据库的改动会随事务回滚，OSS 对象不会，必须显式清理
+      // 数据库的改动会随那个 bean 的事务回滚，OSS 对象不会，必须显式清理
       cleanupUploaded(uploadedForRollback);
       log.error("编辑作品 {} 失败", id, e);
-      markRollback();
       return Result.error(500, "保存失败");
     }
-  }
 
-  /**
-   * 把「删掉被移除媒体的 OSS 对象」挂到事务的提交点之后。
-   *
-   * 直接写在方法体里是不对的：@Transactional 的方法体返回之后才提交，那一刻数据库的改动
-   * 还可能回滚。提前删掉对象的话，回滚之后那几行仍然指向一个已经不在桶里的文件，
-   * 而没有任何地方记着它们曾经存在过。
-   *
-   * 提交点的回调要求当前线程有活动的事务同步（@Transactional 的方法里恒成立）。
-   */
-  private void discardRemovedAfterCommit(List<GalleryMedia> removed) {
-    if (removed.isEmpty()) return;
-    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-      @Override
-      public void afterCommit() {
-        removed.forEach(media -> discardOldObject(media.getSrc()));
-      }
-    });
+    // 7) 那条调用正常返回就表示已经提交，从这里起是**事务之外**：
+    //    被移除媒体的 OSS 对象现在才可以删。这一步失败不影响保存结果
+    discardRemovedMedia(removed);
+    return galleryQueryService.item(id, null);
   }
 
   /** 作者本人或管理员。判定复用 OwnerAccess，与另外几条编辑路径同一个口径。 */
@@ -242,10 +220,28 @@ public class GalleryMediaCommitService {
   }
 
   /**
-   * 提交成功后丢弃不再被引用的旧对象。
+   * 提交之后丢弃不再被引用的旧对象。
    *
-   * 这里**不**让调用方失败：用户的列表已经是好的了，那些对象只是垃圾。
-   * 删不掉就写进可重试记录，别把一次成功的保存报成失败。
+   * 这一步**不让调用方失败**：用户的列表已经是好的了，那些对象只是垃圾。
+   * 连「记录这次失败」都写不进去时也只记日志 —— 那笔保存确实成功了，
+   * 报 500 是假的，而用户看到失败会再提交一遍。
+   */
+  private void discardRemovedMedia(List<GalleryMedia> removed) {
+    for (GalleryMedia media : removed) {
+      try {
+        discardOldObject(media.getSrc());
+      } catch (RuntimeException e) {
+        log.error("编辑作品后清理被移除的媒体失败，且未能记录待重试：{}", media.getSrc(), e);
+      }
+    }
+  }
+
+  /**
+   * 删掉一个不再被引用的旧对象。删不掉就写进可重试记录，别把一次成功的保存报成失败。
+   *
+   * 记录写在那个事务**之外**的独立连接上，所以它不会被回滚掉 —— 这正是
+   * 「对象删不掉」这条路径必须留下的痕迹。挂在数据库事务的提交回调上时，
+   * 那一刻事务已经提交、后面也不会再有 commit，那笔记录会随连接归还被一并回滚。
    */
   private void discardOldObject(String src) {
     if (StringUtils.isBlank(src)) return;
@@ -269,19 +265,6 @@ public class GalleryMediaCommitService {
         log.error("编辑作品失败后的 OSS 清理也失败了：{}", url, e);
         ossCleanupRecordService.recordFailure(url, OSS_CLEANUP_REASON);
       }
-    }
-  }
-
-  /**
-   * 捕获异常后不再向外抛出，事务不会自动回滚，必须显式标记，
-   * 否则「媒体列表已经换掉、元数据没写成功」这种半截状态会被提交。
-   *
-   * 先判断事务是否真的存在：直接调用本方法时（例如单元测试里没有代理）没有活动事务，
-   * 此时 currentTransactionStatus() 会抛异常，而那种情况下本来也没有东西需要回滚。
-   */
-  private void markRollback() {
-    if (TransactionSynchronizationManager.isActualTransactionActive()) {
-      TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
     }
   }
 }

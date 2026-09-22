@@ -238,6 +238,36 @@ class GalleryUploadServiceTest {
   }
 
   @Test
+  void aSuccessfulUploadAlsoWritesTheFirstMediaOfTheWork() throws Exception {
+    when(galleryMapper.selectByClientUploadId(UPLOAD_ID)).thenReturn(null);
+    when(ossUtil.upload(any(), any())).thenReturn(OSS_URL);
+    when(galleryMapper.insert(any())).thenReturn(1);
+    when(photoMapper.insert(any())).thenReturn(1);
+
+    assertEquals(200, service().uploadOne(png(), null, null, UPLOAD_ID, member(), null, null).getCode());
+
+    // 没有这一条，作品在库里就是「有 gallery 行、没有任何媒体」的半成品：
+    // 详情弹窗拿不到数组，翻不动而且不报错
+    var captor = ArgumentCaptor.forClass(Gallery.class);
+    verify(galleryMapper).insert(captor.capture());
+    verify(galleryMediaService).insertFirst(captor.getValue(), OSS_URL, ResourceType.photo);
+  }
+
+  @Test
+  void aFailedMediaInsertDoesNotLeaveTheWorkHalfBuilt() throws Exception {
+    when(galleryMapper.selectByClientUploadId(UPLOAD_ID)).thenReturn(null);
+    when(ossUtil.upload(any(), any())).thenReturn(OSS_URL);
+    when(galleryMapper.insert(any())).thenReturn(1);
+    when(photoMapper.insert(any())).thenReturn(1);
+    when(galleryMediaService.insertFirst(any(), any(), any())).thenReturn(0);
+
+    assertEquals(500, service().uploadOne(png(), null, null, UPLOAD_ID, member(), null, null).getCode());
+
+    // 事务回滚带不动 OSS，失败的那份必须显式清理，否则桶里留一个没人认领的对象
+    verify(ossUtil).deleteByPublicUrl(OSS_URL);
+  }
+
+  @Test
   void uploadLimitsComeFromConfiguration() {
     multipartProperties.setMaxFileSize(org.springframework.util.unit.DataSize.ofMegabytes(5));
     multipartProperties.setMaxRequestSize(org.springframework.util.unit.DataSize.ofMegabytes(20));

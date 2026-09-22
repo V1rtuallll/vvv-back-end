@@ -11,7 +11,10 @@ import java.util.Locale;
 
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 import org.junit.jupiter.api.Test;
+
+import com.v1rtual.vvv_backend.entity.ResourceType;
 
 /**
  * 画廊列表读取与点赞写入路径的 SQL 契约：
@@ -75,5 +78,18 @@ class GalleryMapperContractTest {
     String sql = String.join(" ", candidates.getAnnotation(Select.class).value()).toUpperCase(Locale.ROOT);
     assertTrue(sql.contains("TYPE IN ('MUSIC', 'VIDEO')"), "候选必须包含 music / video 项: " + sql);
     assertTrue(sql.contains("BGM_SRC IS NOT NULL"), "候选必须包含已经配过背景音乐的项: " + sql);
+  }
+
+  @Test
+  void coverUpdateWritesSrcAndTypeTogether() throws Exception {
+    Update update = GalleryMapper.class
+        .getMethod("updateSrcAndType", Long.class, String.class, ResourceType.class)
+        .getAnnotation(Update.class);
+
+    String sql = String.join(" ", update.value());
+    // type 必须一起写：photo 与 gif 同族，只改 src 会让 gallery 表说它是动图、
+    // 类型表里却在 photo 表，两边从此对不上
+    assertTrue(sql.contains("type = #{type}"), sql);
+    assertTrue(sql.contains("src = #{src}"), sql);
   }
 }

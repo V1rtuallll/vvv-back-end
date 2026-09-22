@@ -2,6 +2,7 @@ package com.v1rtual.vvv_backend.service.gallery;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -23,6 +24,7 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 import com.v1rtual.vvv_backend.entity.Gallery;
+import com.v1rtual.vvv_backend.entity.GalleryMedia;
 import com.v1rtual.vvv_backend.entity.ResourceType;
 import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.mapper.CommentLikeMapper;
@@ -32,6 +34,7 @@ import com.v1rtual.vvv_backend.mapper.GalleryLikeMapper;
 import com.v1rtual.vvv_backend.mapper.GalleryMapper;
 import com.v1rtual.vvv_backend.mapper.UserMapper;
 import com.v1rtual.vvv_backend.vo.GalleryItemVO;
+import com.v1rtual.vvv_backend.vo.GalleryMediaItemVO;
 import com.v1rtual.vvv_backend.vo.PageResultVO;
 import com.v1rtual.vvv_backend.vo.Result;
 
@@ -558,6 +561,49 @@ class GalleryQueryServiceTest {
     Result<GalleryItemVO> result = service.item(9L, null);
 
     assertEquals("背景音乐", result.getData().getBgmTitle());
+  }
+
+  // ===== 媒体列表：详情弹窗的翻阅顺序 =====
+
+  /** 组内第二条。与 {@link #ITEM_SRC} 一起构成一个长度为 2 的作品。 */
+  private static final String SECOND_SRC = "https://example.test/imgs/b.png";
+
+  @Test
+  void theListCarriesTheMediaArraySoTheDialogCanPaginateWithoutASecondRequest() {
+    Gallery row = Gallery.builder().id(9L).type(ResourceType.photo).src(ITEM_SRC)
+        .title("t").userId(7L).build();
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    when(galleryMapper.selectPage(0L, 12, null)).thenReturn(List.of(row));
+    CommentMapper commentMapper = mock(CommentMapper.class);
+    when(commentMapper.countGalleryCommentsByTargetIds(List.of(9L))).thenReturn(List.of(row(9L, 0L)));
+
+    GalleryMediaService mediaService = mock(GalleryMediaService.class);
+    when(mediaService.listByGalleryIds(List.of(9L))).thenReturn(Map.of(9L, List.of(
+        GalleryMedia.builder().id(1L).galleryId(9L).src(ITEM_SRC).type(ResourceType.photo).build(),
+        GalleryMedia.builder().id(2L).galleryId(9L).src(SECOND_SRC).type(ResourceType.photo).build())));
+
+    Result<PageResultVO<GalleryItemVO>> result =
+        service(galleryMapper, commentMapper, mock(GalleryBgmMediaMapper.class), mediaService)
+            .list(1, 12, null);
+
+    List<GalleryMediaItemVO> media = result.getData().getList().get(0).getMedia();
+    assertEquals(2, media.size());
+    assertEquals(1L, media.get(0).getId());
+    assertEquals(SECOND_SRC, media.get(1).getSrc());
+  }
+
+  @Test
+  void theMediaArrayIsEmptyRatherThanFabricatedWhenTheQueryDidNotLoadIt() {
+    Gallery row = Gallery.builder().id(9L).type(ResourceType.photo).src(ITEM_SRC).title("t").userId(7L).build();
+    GalleryMapper galleryMapper = mock(GalleryMapper.class);
+    when(galleryMapper.selectBgmCandidates()).thenReturn(List.of(row));
+    when(galleryMapper.selectBySrc(any())).thenReturn(row);
+
+    // 候选列表不查媒体。下发空数组而不是补一条「自己」：
+    // 后者会让「没带」与「真的只有一条」在数据上分不出来
+    Result<List<GalleryItemVO>> result = service(galleryMapper, mock(CommentMapper.class))
+        .bgmCandidates();
+    assertEquals(List.of(), result.getData().get(0).getMedia());
   }
 
   private GalleryQueryService service(GalleryMapper galleryMapper, CommentMapper commentMapper) {

@@ -86,6 +86,14 @@ public class OssUtil {
     ObjectMetadata metadata = new ObjectMetadata();
     metadata.setContentLength(file.getSize());
     metadata.setContentType(file.getContentType());
+    // ⚠️ immutable 成立的前提：本方法每次生成新的 UUID 文件名，同一个公开 URL 的
+    // 内容永不改变。**任何改成「覆盖同名对象上传」的做法都会在这里踩坑** ——
+    // 内容换了但 URL 没换，浏览器一年之内不会来取新的。
+    //
+    // 不设这个头时 OSS 不返回 Cache-Control，浏览器只能走启发式缓存（不可预测），
+    // 或每次发条件请求回源。画廊的每张图、每个视频、每首 BGM 都在 OSS 上，
+    // 那是一次次实打实的外网流量。
+    metadata.setCacheControl("max-age=31536000, immutable");
 
     // 流式上传
     try (InputStream inputStream = file.getInputStream()) {

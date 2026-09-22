@@ -385,6 +385,43 @@ class GalleryMediaCommitServiceTest {
   }
 
   /**
+   * 组内**非封面**媒体被移除时同样要过护栏，而且是按它自己的地址问。
+   *
+   * 它可能曾经是封面、后来在编辑里被重排或替换降成了非封面，然后被人挑成 BGM。
+   * 只查封面那一处的话它会被直接删掉：那些配了它的图从此静默静音，页面不报错，就是没声音。
+   * 这条用例同时也钉住「问的是这个地址本身」—— 换成别人的地址同样会拿到「没人用」，
+   * 而实现会在静默地放行。
+   */
+  @Test
+  void refusesToDropANonCoverMediaThatIsUsedAsBackgroundMusic() throws Exception {
+    stubAWorkingCommit();
+    when(galleryMapper.countByBgmSrc(SECOND_SRC)).thenReturn(1L);
+
+    Result<GalleryItemVO> result =
+        service().commit(GALLERY_ID, payload(keep(11L), keep(13L)), null, member());
+
+    assertEquals(409, result.getCode());
+    assertTrue(result.getMsg().contains("1"), "拒绝理由要说清被几张图占用，实际是：" + result.getMsg());
+    verify(galleryMediaMapper, never()).deleteById(any());
+    verify(galleryMapper, never()).updateMetadata(any());
+    verify(ossUtil, never()).deleteByPublicUrl(anyString());
+  }
+
+  /** 每一个将离开列表的地址都要被问到，不限于封面那一个。 */
+  @Test
+  void asksAboutEveryAddressThatLeavesTheList() throws Exception {
+    stubAWorkingCommit();
+    when(galleryMediaMapper.selectCover(GALLERY_ID)).thenReturn(media(11L, COVER_SRC, 0));
+
+    Result<GalleryItemVO> result =
+        service().commit(GALLERY_ID, payload(keep(11L)), null, member());
+
+    assertEquals(200, result.getCode());
+    verify(galleryMapper).countByBgmSrc(SECOND_SRC);
+    verify(galleryMapper).countByBgmSrc(THIRD_SRC);
+  }
+
+  /**
    * 护栏放行的那一支：问过了、答复是「没人用」，于是照常继续删。
    *
    * 顺带钉住问的是封面自己的地址（I1：封面媒体的 src 与 gallery 行上的那个相同）。

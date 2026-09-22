@@ -92,6 +92,7 @@ public class GalleryMediaCommitService {
 
     List<GalleryMediaCommitDTO.Item> items = payload.getItems();
     Set<Integer> newIndexes = new HashSet<>();
+    Set<Long> keptIds = new HashSet<>();
     for (GalleryMediaCommitDTO.Item item : items) {
       boolean hasId = item.getMediaId() != null;
       boolean hasFile = item.getNewFile() != null;
@@ -101,6 +102,7 @@ public class GalleryMediaCommitService {
       if (hasId && !byId.containsKey(item.getMediaId())) {
         return Result.error(400, "媒体 " + item.getMediaId() + " 不属于这个作品");
       }
+      if (hasId) keptIds.add(item.getMediaId());
       if (hasFile) {
         int index = item.getNewFile();
         if (index < 0 || index >= incoming.length) {
@@ -150,15 +152,17 @@ public class GalleryMediaCommitService {
       return Result.error(400, e.getMessage());
     }
 
-    // 5) 封面将被移除时先过 BGM 护栏。位置在传文件与删行、删对象**之前**：
+    // 5) 将被移除的每一个地址先过 BGM 护栏。位置在传文件与删行、删对象**之前**：
     //    删掉之后那些配了它的图会静默静音 —— 页面不报错、也没人记一笔。
     //    判据与删除路径共用同一个守卫，逻辑只有一份。
-    //    existing 由 listOf 按 sort_order 升序取出，第一条就是封面（I1）
-    GalleryMedia cover = existing.isEmpty() ? null : existing.get(0);
-    boolean coverDropped = cover != null
-        && items.stream().noneMatch(item -> cover.getId().equals(item.getMediaId()));
-    if (coverDropped) {
-      Result<GalleryItemVO> blocked = bgmUsageGuard.blockIfUsedAsBgm(gallery.getSrc());
+    //
+    //    逐个查而不是只查封面：组内非封面的一条同样可能被人挑成 BGM（它曾经是封面，
+    //    后来在编辑里被重排或替换降成了非封面），只查封面会放它过去，
+    //    那些 BGM 从此静默变哑。existing 由 listOf 按 sort_order 升序取出，
+    //    第一条就是封面（I1），所以封面仍然是最先被问到的那一个
+    for (GalleryMedia media : existing) {
+      if (keptIds.contains(media.getId())) continue;
+      Result<GalleryItemVO> blocked = bgmUsageGuard.blockIfUsedAsBgm(media.getSrc());
       if (blocked != null) return blocked;
     }
 

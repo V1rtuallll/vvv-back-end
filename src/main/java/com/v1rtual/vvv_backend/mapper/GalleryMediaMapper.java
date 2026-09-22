@@ -76,15 +76,6 @@ public interface GalleryMediaMapper {
   @Update("UPDATE gallery_media SET sort_order = #{sortOrder} WHERE id = #{id}")
   int updateSortOrder(@Param("id") Long id, @Param("sortOrder") int sortOrder);
 
-  /**
-   * 只改地址。替换某个媒体时用，调用方负责先删旧 OSS 对象。
-   *
-   * 不做「类型也一起改」：换类型等于换了一种资源，同族约束（同一作品的媒体类型
-   * 必须同族）会让它连封面类型一起变，那种情况应该删掉再从编辑弹窗重新加。
-   */
-  @Update("UPDATE gallery_media SET src = #{src} WHERE id = #{id}")
-  int updateSrc(@Param("id") Long id, @Param("src") String src);
-
   @Delete("DELETE FROM gallery_media WHERE id = #{id}")
   int deleteById(@Param("id") Long id);
 

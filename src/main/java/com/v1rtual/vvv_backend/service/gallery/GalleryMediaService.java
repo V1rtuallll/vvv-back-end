@@ -257,18 +257,4 @@ public class GalleryMediaService {
     gallery.setSrc(cover.getSrc());
     gallery.setType(cover.getType());
   }
-
-  /**
-   * 替换封面文件之后，让媒体列表里的封面行跟上。
-   *
-   * 替换路径改的是 gallery 行与类型表，媒体列表是第三处 —— 漏掉它 I1 当场就不成立，
-   * 而症状是详情弹窗的第一张图变成死链，页面不报错。
-   *
-   * @return 更新的行数；0 表示这条作品没有任何媒体行（回填之前的历史数据）
-   */
-  public int updateCoverSrc(Long galleryId, String newSrc) {
-    GalleryMedia cover = galleryMediaMapper.selectCover(galleryId);
-    if (cover == null) return 0;
-    return galleryMediaMapper.updateSrc(cover.getId(), newSrc);
-  }
 }

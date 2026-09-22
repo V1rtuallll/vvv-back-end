@@ -108,8 +108,4 @@ public interface VideoMapper {
             "uploader_id, uploader_username " +
             "FROM video WHERE id = #{id}")
     Video selectById(Long id);
-
-    /** 替换文件时同步类型表的 src —— 它必须跟 gallery 表的 src 保持一致 */
-    @Update("UPDATE video SET src = #{newSrc}, updated_at = NOW() WHERE src = #{oldSrc}")
-    int updateSrcBySrc(@Param("oldSrc") String oldSrc, @Param("newSrc") String newSrc);
 }

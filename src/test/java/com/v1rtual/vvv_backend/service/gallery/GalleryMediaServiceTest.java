@@ -164,30 +164,6 @@ class GalleryMediaServiceTest {
     assertEquals("https://example.test/imgs/old.png", gallery.getSrc());
   }
 
-  /** 替换封面之后让媒体行跟上：改的是那一行自己的 id，不是作品 id。 */
-  @Test
-  void updatingTheCoverSrcTargetsTheCoverRow() {
-    when(galleryMediaMapper.selectCover(7L))
-        .thenReturn(media(9L, "https://example.test/imgs/old.png", ResourceType.photo, 0));
-    when(galleryMediaMapper.updateSrc(9L, "https://example.test/imgs/new.png")).thenReturn(1);
-
-    assertEquals(1, service().updateCoverSrc(7L, "https://example.test/imgs/new.png"));
-    verify(galleryMediaMapper).updateSrc(9L, "https://example.test/imgs/new.png");
-  }
-
-  /**
-   * 回填之前的历史数据没有媒体行，一行也同步不了。
-   *
-   * 返回 0 而不是抛异常：调用方怎么处理这个 0 是它的事，这里只负责如实回答。
-   */
-  @Test
-  void updatingTheCoverSrcOfALegacyGalleryUpdatesNothing() {
-    when(galleryMediaMapper.selectCover(7L)).thenReturn(null);
-
-    assertEquals(0, service().updateCoverSrc(7L, "https://example.test/imgs/new.png"));
-    verify(galleryMediaMapper, never()).updateSrc(any(), anyString());
-  }
-
   @Test
   void coverSyncRefusesWhenTheGalleryHasNoMediaLeft() {
     when(galleryMediaMapper.selectCover(7L)).thenReturn(null);

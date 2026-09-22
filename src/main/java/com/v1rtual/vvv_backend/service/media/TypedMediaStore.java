@@ -61,20 +61,6 @@ public class TypedMediaStore {
     };
   }
 
-  /**
-   * 把类型表里某个地址换成另一个。src 是 gallery 与类型表之间的关联键，
-   * 两张表必须同时改，所以单独开一个方法而不是走按 id 的更新。
-   */
-  public int updateSrc(ResourceType type, String oldSrc, String newSrc) {
-    if (type == null || StringUtils.isBlank(oldSrc)) return 0;
-    return switch (type) {
-      case photo -> photoMapper.updateSrcBySrc(oldSrc, newSrc);
-      case gif -> gifMapper.updateSrcBySrc(oldSrc, newSrc);
-      case video -> videoMapper.updateSrcBySrc(oldSrc, newSrc);
-      case music -> musicMapper.updateSrcBySrc(oldSrc, newSrc);
-    };
-  }
-
   public int deleteBySrc(ResourceType type, String src) {
     if (type == null || StringUtils.isBlank(src)) return 0;
     return switch (type) {

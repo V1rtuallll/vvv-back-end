@@ -97,8 +97,4 @@ public interface GifMapper {
             "uploader_id, uploader_username " +
             "FROM gif WHERE id = #{id}")
     Gif selectById(Long id);
-
-    /** 替换文件时同步类型表的 src —— 它必须跟 gallery 表的 src 保持一致 */
-    @Update("UPDATE gif SET src = #{newSrc}, updated_at = NOW() WHERE src = #{oldSrc}")
-    int updateSrcBySrc(@Param("oldSrc") String oldSrc, @Param("newSrc") String newSrc);
 }

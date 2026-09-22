@@ -11,7 +11,7 @@ import lombok.Data;
  *
  * 上传者信息是读取时按 user_id 关联出来的实时值，不是类型表里的快照列。
  * 可编辑的元数据（alt / tags / category）不在这里：列表接口从来不下发它们，
- * 编辑接口有自己的 {@link GalleryMetadataVO}。
+ * 编辑弹窗的保存返回的也是这个形状。
  */
 @Data
 @Builder

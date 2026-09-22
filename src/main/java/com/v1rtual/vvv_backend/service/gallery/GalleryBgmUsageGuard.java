@@ -35,7 +35,8 @@ public class GalleryBgmUsageGuard {
    * （删除路径上那条项本身也没了），再返回拒绝也只是一句空话。
    *
    * 返回类型带一个类型参数，是因为两个调用方声明的返回值不同
-   * （{@code Result<Void>} 与 {@code Result<UploadResultVO>}）；
+   * （{@link GalleryManageService#deleteGallery} 的 {@code Result<Void>} 与
+   * {@link GalleryMediaCommitService#commit} 的 {@code Result<GalleryItemVO>}）；
    * 这里只有失败这一种结果、与 T 无关，调用方各自按自己的签名接住即可。
    *
    * @param src 即将被删除的 OSS 地址，可以是 null 或空白

@@ -70,12 +70,6 @@ class TypedMediaStoreTest {
   }
 
   @Test
-  void aBlankOldSrcUpdatesNothing() {
-    assertEquals(0, store().updateSrc(ResourceType.photo, "   ", "new"));
-    verify(photoMapper, never()).updateSrcBySrc(any(), any());
-  }
-
-  @Test
   void aBlankSrcDeletesNothing() {
     assertEquals(0, store().deleteBySrc(ResourceType.video, ""));
     verify(videoMapper, never()).deleteBySrc(any());

@@ -323,4 +323,55 @@ class HomeQueryServiceTest {
 
     assertEquals("一段描述", result.getData().getAlt());
   }
+
+  // ===== 缺失的描述 =====
+
+  /**
+   * 描述缺失时下发 null，占位文案交给前端定。
+   *
+   * 服务端填一个「未知」字符串会把这个区别抹掉：前端拿到的是非空值，
+   * 它自己的「无描述」兜底永远不会触发，页面上就一直挂着一个「未知」。
+   */
+  @Test
+  void detailSendsNullDescriptionInsteadOfAStandInWord() {
+    Photo withoutDescription = Photo.builder().src("https://example.test/a.png").title("月光").build();
+    when(photoMapper.selectBySrc("https://example.test/a.png")).thenReturn(withoutDescription);
+
+    Result<HomeMediaDetailVO> result = service().getFullItem("https://example.test/a.png", "photo");
+
+    assertNull(result.getData().getDescription());
+  }
+
+  @Test
+  void randomMainSendsNullDescriptionInsteadOfAStandInWord() {
+    Photo withoutDescription = Photo.builder().src("https://example.test/a.png").title("月光").build();
+    when(photoMapper.countAll()).thenReturn(1L);
+    when(photoMapper.selectByOffset(anyInt())).thenReturn(withoutDescription);
+    when(photoMapper.selectBySrc("https://example.test/a.png")).thenReturn(withoutDescription);
+
+    Result<HomeMediaDetailVO> result = service().getRandomMain("photo", null);
+
+    assertNull(result.getData().getDescription());
+  }
+
+  @Test
+  void configSendsNullDescriptionWhenTheColumnIsEmpty() {
+    HomeConfig config = randomConfig("photo");
+    config.setMainDesc(null);
+    when(homeConfigMapper.getHomeConfig()).thenReturn(config);
+
+    Result<HomeConfigResponseVO> result = service().getConfig();
+
+    assertNull(result.getData().getMain().getDesc());
+  }
+
+  /** 一行配置都没有时也一样：不填占位词，否则前端的兜底照样被挡住 */
+  @Test
+  void defaultConfigSendsNullDescriptionToo() {
+    when(homeConfigMapper.getHomeConfig()).thenReturn(null);
+
+    Result<HomeConfigResponseVO> result = service().getConfig();
+
+    assertNull(result.getData().getMain().getDesc());
+  }
 }

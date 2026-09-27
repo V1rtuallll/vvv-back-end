@@ -71,7 +71,9 @@ public class HomeQueryService {
         .type(type)
         .src(src)
         .title(StringUtils.defaultString(config.getMainTitle(), UNKNOWN))
-        .desc(StringUtils.defaultString(config.getMainDesc(), UNKNOWN))
+        // 描述不填占位词：填了前端就分不出「没有描述」与「描述就是这几个字」，
+        // 它自己的无描述兜底永远不会触发。占位文案归前端管
+        .desc(config.getMainDesc())
         .alt(StringUtils.defaultString(config.getMainAlt(), UNKNOWN))
         .random(config.getMainRandom() != null && config.getMainRandom() == 1)
         .build();
@@ -121,7 +123,8 @@ public class HomeQueryService {
         .type(metadata.type())
         .src(src)
         .title(StringUtils.defaultString(metadata.title(), UNKNOWN))
-        .description(StringUtils.defaultString(metadata.description(), UNKNOWN))
+        // 同 getConfig：描述缺失就下发 null，占位文案由前端决定
+        .description(metadata.description())
         .alt(StringUtils.defaultString(metadata.alt(), UNKNOWN))
         .uploaderAvatar(resolveAvatar(uploader))
         .uploaderUsername(resolveUsername(uploader, metadata.uploaderUsername()))
@@ -146,7 +149,7 @@ public class HomeQueryService {
     config.setMainType("video");
     config.setMainSrc("https://example.com/default-video.mp4");
     config.setMainTitle(UNKNOWN);
-    config.setMainDesc(UNKNOWN);
+    // 描述刻意留空：与 getConfig 同一条口径，占位词由前端给
     config.setMainAlt(UNKNOWN);
     config.setMainRandom(0);
     config.setGalleryJson("[]");

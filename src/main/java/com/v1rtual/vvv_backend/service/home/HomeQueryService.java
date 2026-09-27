@@ -20,9 +20,11 @@ import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.mapper.GalleryMapper;
 import com.v1rtual.vvv_backend.mapper.HomeConfigMapper;
 import com.v1rtual.vvv_backend.service.UserService;
+import com.v1rtual.vvv_backend.service.gallery.GalleryMediaService;
 import com.v1rtual.vvv_backend.service.media.MediaMetadata;
 import com.v1rtual.vvv_backend.service.media.MediaTypeRegistry;
 import com.v1rtual.vvv_backend.service.media.MediaTypeStrategy;
+import com.v1rtual.vvv_backend.vo.GalleryMediaItemVO;
 import com.v1rtual.vvv_backend.vo.GalleryVO;
 import com.v1rtual.vvv_backend.vo.HomeConfigResponseVO;
 import com.v1rtual.vvv_backend.vo.HomeMainVO;
@@ -55,6 +57,7 @@ public class HomeQueryService {
   private final MediaTypeRegistry mediaTypeRegistry;
   private final UserService userService;
   private final GalleryMapper galleryMapper;
+  private final GalleryMediaService galleryMediaService;
 
   public Result<HomeConfigResponseVO> getConfig() {
     HomeConfig config = homeConfigMapper.getHomeConfig();
@@ -132,6 +135,9 @@ public class HomeQueryService {
         .bgmSrc(galleryRow == null ? null : galleryRow.getBgmSrc())
         .bgmType(galleryRow == null ? null : galleryRow.getBgmType())
         .inGallery(galleryRow != null)
+        // 同上，媒体列表也只能从 gallery 表取。不在画廊里就是空数组，
+        // 前端据此不渲染翻页控件 —— 不是「加载失败」，是这条素材本来就没有图集
+        .media(galleryRow == null ? List.of() : mediaItemsOf(galleryRow.getId()))
         .build(), "完整资源加载成功");
   }
 
@@ -215,5 +221,10 @@ public class HomeQueryService {
 
   private String formatTimeOrUnknown(LocalDateTime time) {
     return time == null ? UNKNOWN_TIME : time.format(DATE_FORMAT);
+  }
+
+  /** 一条作品登记的整组媒体，按翻阅顺序 */
+  private List<GalleryMediaItemVO> mediaItemsOf(Long galleryId) {
+    return GalleryMediaItemVO.fromAll(galleryMediaService.listOf(galleryId));
   }
 }

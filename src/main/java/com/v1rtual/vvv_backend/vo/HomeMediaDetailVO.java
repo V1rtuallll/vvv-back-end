@@ -1,5 +1,7 @@
 package com.v1rtual.vvv_backend.vo;
 
+import java.util.List;
+
 import lombok.Builder;
 import lombok.Data;
 
@@ -39,4 +41,14 @@ public class HomeMediaDetailVO {
    * 取值就是上面那次按 src 关联的结果，不额外查一次。
    */
   private Boolean inGallery;
+  /**
+   * 这条作品登记的全部媒体，按翻阅顺序；不在画廊里时是空数组。
+   *
+   * 与画廊列表读的是同一份数据（gallery_media），前端翻页因此能用同一套规则 ——
+   * 不下发的话主展示只认得封面那一条，图集在这里永远翻不动，而且不报错。
+   *
+   * 空数组而不是 null：前端按「长度是不是大于 1」决定要不要渲染翻页控件，
+   * 少一次判空。
+   */
+  private List<GalleryMediaItemVO> media;
 }

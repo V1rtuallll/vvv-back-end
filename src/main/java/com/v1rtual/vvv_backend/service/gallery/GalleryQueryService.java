@@ -207,14 +207,8 @@ public class GalleryQueryService {
   }
 
   private static List<GalleryMediaItemVO> toMediaItems(List<GalleryMedia> media) {
-    if (media == null || media.isEmpty()) return List.of();
-    return media.stream()
-        .map(item -> GalleryMediaItemVO.builder()
-            .id(item.getId())
-            .src(item.getSrc())
-            .type(item.getType() == null ? null : item.getType().name())
-            .build())
-        .collect(Collectors.toList());
+    // 映射放在 VO 上：首页主展示读的是同一份媒体，两处各写一遍迟早漂掉
+    return GalleryMediaItemVO.fromAll(media);
   }
 
   /**

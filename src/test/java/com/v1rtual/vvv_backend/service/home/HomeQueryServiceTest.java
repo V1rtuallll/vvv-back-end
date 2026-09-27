@@ -10,13 +10,17 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.v1rtual.vvv_backend.entity.Gallery;
+import com.v1rtual.vvv_backend.entity.GalleryMedia;
 import com.v1rtual.vvv_backend.entity.Gif;
 import com.v1rtual.vvv_backend.entity.HomeConfig;
 import com.v1rtual.vvv_backend.entity.Photo;
+import com.v1rtual.vvv_backend.entity.ResourceType;
 import com.v1rtual.vvv_backend.entity.User;
 import com.v1rtual.vvv_backend.entity.Video;
 import com.v1rtual.vvv_backend.mapper.GalleryMapper;
@@ -25,6 +29,7 @@ import com.v1rtual.vvv_backend.mapper.HomeConfigMapper;
 import com.v1rtual.vvv_backend.mapper.PhotoMapper;
 import com.v1rtual.vvv_backend.mapper.VideoMapper;
 import com.v1rtual.vvv_backend.service.UserService;
+import com.v1rtual.vvv_backend.service.gallery.GalleryMediaService;
 import com.v1rtual.vvv_backend.service.media.MediaTypeRegistry;
 import com.v1rtual.vvv_backend.vo.HomeConfigResponseVO;
 import com.v1rtual.vvv_backend.vo.HomeMediaDetailVO;
@@ -38,10 +43,12 @@ class HomeQueryServiceTest {
   private final PhotoMapper photoMapper = mock(PhotoMapper.class);
   private final UserService userService = mock(UserService.class);
   private final GalleryMapper galleryMapper = mock(GalleryMapper.class);
+  private final GalleryMediaService galleryMediaService = mock(GalleryMediaService.class);
 
   private HomeQueryService service() {
     return new HomeQueryService(homeConfigMapper, new ObjectMapper(),
-        new MediaTypeRegistry(videoMapper, gifMapper, photoMapper, galleryMapper), userService, galleryMapper);
+        new MediaTypeRegistry(videoMapper, gifMapper, photoMapper, galleryMapper), userService, galleryMapper,
+        galleryMediaService);
   }
 
   private static Photo photo(String src, String title) {
@@ -373,5 +380,42 @@ class HomeQueryServiceTest {
     Result<HomeConfigResponseVO> result = service().getConfig();
 
     assertNull(result.getData().getMain().getDesc());
+  }
+
+  // ===== 主展示的图集 =====
+
+  /**
+   * 主展示落在画廊里时要把整组媒体一并下发。
+   *
+   * 不下发的话首页只知道封面那一条，图集在主展示上永远翻不动 ——
+   * 而画廊详情弹窗读的是同一份 media，两边会翻出不同的条数。
+   */
+  @Test
+  void detailShipsTheWholeMediaListOfAGalleryItem() {
+    Photo cover = Photo.builder().src("https://example.test/a.png").title("组图").build();
+    when(photoMapper.selectBySrc("https://example.test/a.png")).thenReturn(cover);
+    when(galleryMapper.selectBySrc("https://example.test/a.png"))
+        .thenReturn(Gallery.builder().id(100L).src("https://example.test/a.png").build());
+    when(galleryMediaService.listOf(100L)).thenReturn(List.of(
+        GalleryMedia.builder().id(11L).src("https://example.test/a.png").type(ResourceType.photo).build(),
+        GalleryMedia.builder().id(12L).src("https://example.test/b.png").type(ResourceType.photo).build()));
+
+    Result<HomeMediaDetailVO> result = service().getFullItem("https://example.test/a.png", "photo");
+
+    assertEquals(2, result.getData().getMedia().size());
+    assertEquals("https://example.test/a.png", result.getData().getMedia().get(0).getSrc());
+    assertEquals("https://example.test/b.png", result.getData().getMedia().get(1).getSrc());
+  }
+
+  /** 没进过画廊的素材没有媒体列表可言，下发空数组而不是 null */
+  @Test
+  void detailShipsAnEmptyMediaListWhenTheItemIsNotInTheGallery() {
+    when(photoMapper.selectBySrc("https://example.test/loose.png"))
+        .thenReturn(Photo.builder().src("https://example.test/loose.png").build());
+    when(galleryMapper.selectBySrc("https://example.test/loose.png")).thenReturn(null);
+
+    Result<HomeMediaDetailVO> result = service().getFullItem("https://example.test/loose.png", "photo");
+
+    assertEquals(0, result.getData().getMedia().size());
   }
 }

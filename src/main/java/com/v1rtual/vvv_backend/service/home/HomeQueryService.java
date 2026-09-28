@@ -46,7 +46,21 @@ import lombok.extern.slf4j.Slf4j;
 public class HomeQueryService {
 
   private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
-  private static final int PICK_ATTEMPTS = 4;
+
+  /**
+   * 随机取一条时最多重抽几次，用来避开 exclude 里的 src。
+   *
+   * 重抽是拒绝采样：抽到被排除的就再来一次，次数用尽就退回「最后抽到的那条」
+   * （宁可重复也不返回空）。所以这个数字直接决定「主展示和下方卡片撞车」的概率，
+   * 而池子越小它越要紧 —— 池子 6 条、排掉 4 条时实测（20 万次模拟）：
+   *
+   *   重抽 4 次 → 撞车 19.64%      重抽 12 次 → 0.79%      重抽 20 次 → 0.03%
+   *
+   * 取 12 是「一次正常抽签仍然只查一次库」与「撞车率掉到 1% 以下」之间的折中：
+   * 只有池子快被抽干时才会真的重抽到十几次。池子大时（82 条）本条几乎不生效，
+   * 4 次和 12 次的撞车率都在 0.0x% 一档。
+   */
+  private static final int PICK_ATTEMPTS = 12;
   private static final String UNKNOWN = "未知";
   private static final String UNKNOWN_TIME = "未知时间";
   private static final String DEFAULT_USERNAME = "V1rtual";

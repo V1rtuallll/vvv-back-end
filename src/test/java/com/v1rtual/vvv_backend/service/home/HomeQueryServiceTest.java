@@ -418,4 +418,59 @@ class HomeQueryServiceTest {
 
     assertEquals(0, result.getData().getMedia().size());
   }
+
+  /**
+   * 在画廊里的资源，标题 / 描述 / alt 以 **gallery 表**为准。
+   *
+   * 两张表都存这几个字段，而画廊页的编辑只写 gallery 表；只看类型表的话，
+   * 用户在画廊里改了描述、主展示却还是旧的 —— 而主展示的「详情」按钮跳的正是画廊页，
+   * 两边对不上，看上去就是主展示坏了。
+   */
+  @Test
+  void detailPrefersTheGalleryRowOverTheTypeTable() {
+    when(photoMapper.selectBySrc("https://example.test/a.png")).thenReturn(Photo.builder()
+        .src("https://example.test/a.png").title("类型表里的旧标题")
+        .description("类型表里的旧描述").alt("类型表 alt").build());
+    when(galleryMapper.selectBySrc("https://example.test/a.png")).thenReturn(Gallery.builder()
+        .id(100L).src("https://example.test/a.png").title("画廊里的新标题")
+        .description("画廊里的新描述").alt("画廊 alt").build());
+    when(galleryMediaService.listOf(100L)).thenReturn(List.of());
+
+    HomeMediaDetailVO data = service().getFullItem("https://example.test/a.png", "photo").getData();
+
+    assertEquals("画廊里的新标题", data.getTitle());
+    assertEquals("画廊里的新描述", data.getDescription());
+    assertEquals("画廊 alt", data.getAlt());
+  }
+
+  /**
+   * 把描述清空是一个明确的结果，不能被类型表里的旧值顶回来 ——
+   * 否则用户在画廊里点了清空，主页上照样显示着那段旧文案。
+   */
+  @Test
+  void detailKeepsAClearedDescriptionCleared() {
+    when(photoMapper.selectBySrc("https://example.test/a.png")).thenReturn(Photo.builder()
+        .src("https://example.test/a.png").description("类型表里的旧描述").build());
+    when(galleryMapper.selectBySrc("https://example.test/a.png")).thenReturn(Gallery.builder()
+        .id(100L).src("https://example.test/a.png").description(null).build());
+    when(galleryMediaService.listOf(100L)).thenReturn(List.of());
+
+    HomeMediaDetailVO data = service().getFullItem("https://example.test/a.png", "photo").getData();
+
+    assertNull(data.getDescription());
+  }
+
+  /** 没进画廊的素材照旧读类型表 —— 那个池子（all / video 这类）只能靠它 */
+  @Test
+  void detailFallsBackToTheTypeTableWhenNotInTheGallery() {
+    when(photoMapper.selectBySrc("https://example.test/loose.png")).thenReturn(Photo.builder()
+        .src("https://example.test/loose.png").title("站内标题").description("站内描述").build());
+    when(galleryMapper.selectBySrc("https://example.test/loose.png")).thenReturn(null);
+
+    HomeMediaDetailVO data =
+        service().getFullItem("https://example.test/loose.png", "photo").getData();
+
+    assertEquals("站内标题", data.getTitle());
+    assertEquals("站内描述", data.getDescription());
+  }
 }

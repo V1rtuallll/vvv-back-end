@@ -136,13 +136,27 @@ public class HomeQueryService {
     // 按 src 关联 —— 首页展示的资源未必都在画廊里，关联不到就是没有 BGM，属正常情况，
     // 不能当成错误。
     Gallery galleryRow = galleryMapper.selectBySrc(src);
+
+    // 标题 / 描述 / alt 在**两张表里各存一份**（gallery 表与 photo / gif / video 类型表），
+    // 两表之间没有外键也没有唯一约束，全靠 src 字符串对应。**在画廊里的资源一律以
+    // gallery 表为准**：画廊页的编辑只写 gallery 表（GalleryMediaCommitService），
+    // 类型表那份会一直留着旧值 —— 而主展示的「详情」按钮跳的正是一个画廊条目，
+    // 两边显示不同的描述，看上去就是主展示坏了。
+    //
+    // 取值**不打非空兜底**：把描述清空是一个明确的结果，回落成类型表里的旧值
+    // 会让「清空」这个动作在主页上失效。类型表那一份留给没进画廊的素材
+    // （all / video 这类池子）用。
+    String title = galleryRow != null ? galleryRow.getTitle() : metadata.title();
+    String description = galleryRow != null ? galleryRow.getDescription() : metadata.description();
+    String alt = galleryRow != null ? galleryRow.getAlt() : metadata.alt();
+
     return Result.success(HomeMediaDetailVO.builder()
         .type(metadata.type())
         .src(src)
-        .title(StringUtils.defaultString(metadata.title(), UNKNOWN))
+        .title(StringUtils.defaultString(title, UNKNOWN))
         // 同 getConfig：描述缺失就下发 null，占位文案由前端决定
-        .description(metadata.description())
-        .alt(StringUtils.defaultString(metadata.alt(), UNKNOWN))
+        .description(description)
+        .alt(StringUtils.defaultString(alt, UNKNOWN))
         .uploaderAvatar(resolveAvatar(uploader))
         .uploaderUsername(resolveUsername(uploader, metadata.uploaderUsername()))
         .uploadTime(formatTimeOrUnknown(metadata.createdAt()))

@@ -58,30 +58,42 @@ public interface GalleryMapper {
    * 按 src 查行。gallery 与 photo/gif/video/music 以 src 关联，没有外键，
    * 后台编辑类型表后靠它定位需要同步的 gallery 行。
    */
+  @Select("SELECT * FROM gallery WHERE src = #{src} LIMIT 1")
+  Gallery selectBySrc(String src);
+
   /**
-   * 「画廊里的图片 / 动图」有多少条。
+   * 「画廊里的全部内容」有多少条：图片 / 动图 / 视频三类都算。
    *
-   * 画廊的图文全在 photo 表，动图在 gif 表 —— 交集就是可以点进详情的那些。
-   * 用 UNION ALL 而不是两次往返：计数与取第 N 条必须基于同一个集合，
-   * 分开查的话两边可能落在不同的数据快照上，翻页会漏条或重复。
+   * 这是首页主展示「仅画廊内容」模式的池子。三条都必须 JOIN gallery ——
+   * **没进画廊的素材一律不算，视频也一样**：video 表里有大量只上传、没进画廊的素材，
+   * 把它们整表并进来会让主展示几乎全是视频。
+   *
+   * 计数与取第 N 条必须基于同一个集合，所以两个方法都写成同一段 UNION ALL，
+   * 分成两次往返的话两边可能落在不同的数据快照上，翻页会漏条或重复。
    */
   @Select("SELECT COUNT(*) FROM ("
       + "SELECT p.id FROM photo p JOIN gallery g ON g.src = p.src "
       + "UNION ALL "
-      + "SELECT f.id FROM gif f JOIN gallery g ON g.src = f.src"
+      + "SELECT f.id FROM gif f JOIN gallery g ON g.src = f.src "
+      + "UNION ALL "
+      + "SELECT v.id FROM video v JOIN gallery g ON g.src = v.src"
       + ") t")
-  long countGalleryMedia();
+  long countGalleryAllMedia();
 
-  /** 上面那个集合里按 offset 取一条 src；越界返回 null */
+  /**
+   * 上面那个集合里按 offset 取一条 src；越界返回 null。
+   *
+   * 排序补一个 src 作次键：三张表的 id 各自自增，跨表重号是常态，
+   * 只按 id 排的话同一次查询的两次执行可能给出不同的第 N 条。
+   */
   @Select("SELECT src FROM ("
       + "SELECT p.src AS src, p.id AS id FROM photo p JOIN gallery g ON g.src = p.src "
       + "UNION ALL "
-      + "SELECT f.src AS src, f.id AS id FROM gif f JOIN gallery g ON g.src = f.src"
-      + ") t ORDER BY t.id LIMIT 1 OFFSET #{offset}")
-  String selectGalleryMediaSrcAt(@Param("offset") int offset);
-
-  @Select("SELECT * FROM gallery WHERE src = #{src} LIMIT 1")
-  Gallery selectBySrc(String src);
+      + "SELECT f.src AS src, f.id AS id FROM gif f JOIN gallery g ON g.src = f.src "
+      + "UNION ALL "
+      + "SELECT v.src AS src, v.id AS id FROM video v JOIN gallery g ON g.src = v.src"
+      + ") t ORDER BY t.id, t.src LIMIT 1 OFFSET #{offset}")
+  String selectGalleryAllMediaSrcAt(@Param("offset") int offset);
 
   /**
    * 更新元数据。SET 列表只含可编辑列，src / type / user_id 不参与，

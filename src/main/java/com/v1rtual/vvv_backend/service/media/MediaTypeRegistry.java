@@ -36,10 +36,8 @@ public class MediaTypeRegistry {
     Map<String, MediaTypeStrategy> index = new HashMap<>();
     List<MediaTypeStrategy> strategies = new java.util.ArrayList<>(members);
     strategies.add(new AllStrategy(members));
-    // 「画廊内」只覆盖图片与动图：视频和音乐从来不是画廊的图文内容
-    strategies.add(new GalleryStrategy(galleryMapper, videoMapper,
-        new VideoStrategy(videoMapper),
-        List.of(new PhotoStrategy(photoMapper), new GifStrategy(gifMapper))));
+    // 「仅画廊内容」：三类都由 gallery 表筛，具体类型交给 members 反查
+    strategies.add(new GalleryStrategy(galleryMapper, members));
     for (MediaTypeStrategy strategy : strategies) {
       index.put(strategy.typeName(), strategy);
       strategy.aliases().forEach(alias -> index.put(alias, strategy));
@@ -101,19 +99,19 @@ public class MediaTypeRegistry {
   }
 
   /**
-   * 「画廊图文 + 全部视频」。
+   * 「仅画廊内容」。
    *
-   * 池子 = gallery ∩ (photo ∪ gif) ∪ 整张 video 表，两边规则不同：
-   *   · 图片/动图**只取画廊里的** —— 画廊的图文全在 photo 表，动图在 gif 表，
-   *     取交集才能保证每条都能点进详情；
-   *   · 视频**取全部** —— 视频几乎不在画廊里（实测 13 条视频 0 条在画廊），
-   *     只取交集等于把视频整个排除掉。
+   * 池子 = gallery ∩ (photo ∪ gif ∪ video)：画廊表里的每一条都得能在对应的类型表里
+   * 找到同 src 的那一行，否则详情按钮点开是空的。
+   *
+   * **铁律是「没进画廊的一律不取」，视频不例外。** 早先的规则把整张 video 表并了进来
+   * （理由是「视频几乎不在画廊里，取交集等于把视频排除掉」），结果视频表里那些只上传、
+   * 没进画廊的素材占了池子七成以上，首页主展示于是几乎全是它们。现在要更多视频，
+   * 得先把它们放进画廊。
    */
   private record GalleryStrategy(
       GalleryMapper galleryMapper,
-      VideoMapper videoMapper,
-      MediaTypeStrategy videoStrategy,
-      List<MediaTypeStrategy> galleryMembers) implements MediaTypeStrategy {
+      List<MediaTypeStrategy> members) implements MediaTypeStrategy {
 
     @Override
     public String typeName() {
@@ -127,30 +125,23 @@ public class MediaTypeRegistry {
 
     @Override
     public long count() {
-      return galleryMapper.countGalleryMedia() + videoMapper.countAll();
+      return galleryMapper.countGalleryAllMedia();
     }
 
     @Override
     public String srcAt(int offset) {
-      // 先铺画廊图文，再接视频表 —— 顺序无所谓，但两段必须首尾相接，
-      // 中间断开就会有一部分永远抽不到
-      long galleryTotal = galleryMapper.countGalleryMedia();
-      if (offset < galleryTotal) return galleryMapper.selectGalleryMediaSrcAt(offset);
-      Video row = videoMapper.selectByOffset((int) (offset - galleryTotal));
-      return row == null ? null : row.getSrc();
+      return galleryMapper.selectGalleryAllMediaSrcAt(offset);
     }
 
     @Override
     public MediaMetadata findBySrc(String src) {
-      // 图片/动图必须在画廊里 —— 否则会给一条点不开详情的资源配上详情按钮
-      if (galleryMapper.selectBySrc(src) != null) {
-        for (MediaTypeStrategy member : galleryMembers) {
-          MediaMetadata found = member.findBySrc(src);
-          if (found != null) return found;
-        }
+      // 不在画廊里就当作不存在 —— 否则会给一条点不开详情的资源配上详情按钮
+      if (galleryMapper.selectBySrc(src) == null) return null;
+      for (MediaTypeStrategy member : members) {
+        MediaMetadata found = member.findBySrc(src);
+        if (found != null) return found;
       }
-      // 视频不要求进画廊
-      return videoStrategy.findBySrc(src);
+      return null;
     }
   }
 

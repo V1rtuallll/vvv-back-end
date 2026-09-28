@@ -38,14 +38,14 @@ class MediaTypeRegistryTest {
     photoMapper = mock(PhotoMapper.class);
     galleryMapper = mock(GalleryMapper.class);
 
-    // 「只看画廊」模式：画廊里有 3 条图文，取第 offset 条走 mock
-    when(galleryMapper.countGalleryMedia()).thenReturn(3L);
-    when(galleryMapper.selectGalleryMediaSrcAt(0)).thenReturn("p0");
-    when(galleryMapper.selectGalleryMediaSrcAt(1)).thenReturn("p1");
-    when(galleryMapper.selectGalleryMediaSrcAt(2)).thenReturn("g0");
+    // 「仅画廊内容」模式：画廊里有 2 条图文 + 1 条视频，取第 offset 条走 mock
+    when(galleryMapper.countGalleryAllMedia()).thenReturn(3L);
+    when(galleryMapper.selectGalleryAllMediaSrcAt(0)).thenReturn("p0");
+    when(galleryMapper.selectGalleryAllMediaSrcAt(1)).thenReturn("p1");
+    when(galleryMapper.selectGalleryAllMediaSrcAt(2)).thenReturn("v0");
     when(galleryMapper.selectBySrc(anyString())).thenAnswer(i -> {
       String s = i.getArgument(0);
-      return (s.equals("p0") || s.equals("p1") || s.equals("g0")) ? new com.v1rtual.vvv_backend.entity.Gallery() : null;
+      return (s.equals("p0") || s.equals("p1") || s.equals("v0")) ? new com.v1rtual.vvv_backend.entity.Gallery() : null;
     });
 
     // video 2 条、gif 1 条、photo 3 条 —— 故意各不相同，offset 映射错了就会露馅
@@ -124,31 +124,34 @@ class MediaTypeRegistryTest {
   }
 
   /**
-   * 「画廊图文 + 全部视频」的池子是两段拼起来的，规则还不同 ——
-   * 图片/动图必须在画廊里，视频不要求。这里盯的就是这条不对称。
+   * 「仅画廊内容」的池子只有一个来源：gallery ∩ (photo ∪ gif ∪ video)。
+   *
+   * 这里盯的是**视频也要在画廊里**这条。早先视频是整表并进来的，首页主展示因此
+   * 几乎全是只上传、没进画廊的视频；改回交集后 v1 这种「在 video 表、不在画廊」
+   * 的素材必须当作不存在 —— 它既不该被抽到，也不该配详情按钮。
    */
   @Test
-  void galleryModeTakesGalleryMediaPlusEveryVideo() {
+  void galleryModeTakesOnlyWhatIsInTheGallery() {
     MediaTypeStrategy gallery = registry.find("gallery");
     assertNotNull(gallery);
     assertEquals(gallery, registry.find("gallery-only"));
     assertEquals(gallery, registry.find("in-gallery"));
 
-    // 3 条画廊图文 + 2 条视频
-    assertEquals(5L, gallery.count());
+    // 2 条图文 + 1 条视频，全部来自 gallery 表
+    assertEquals(3L, gallery.count());
 
-    // 前 3 个 offset 落在画廊段，之后接视频段
     assertEquals("p0", gallery.srcAt(0));
-    assertEquals("v0", gallery.srcAt(3));
+    assertEquals("p1", gallery.srcAt(1));
+    assertEquals("v0", gallery.srcAt(2));
 
     // 在画廊里 → 正常返回，带上具体类型
     assertEquals("photo", gallery.findBySrc("p0").type());
-    assertEquals("gif", gallery.findBySrc("g0").type());
-    // 视频**不需要**在画廊里
     assertEquals("video", gallery.findBySrc("v0").type());
     // 在 photo 表里但不在画廊里 → 当作不存在，
     // 否则首页会展示一条点开详情的死链接
     assertNull(gallery.findBySrc("p9"));
+    // 视频不例外：不在画廊里就没有它
+    assertNull(gallery.findBySrc("v1"));
   }
 
   private static Video video(String src) {
